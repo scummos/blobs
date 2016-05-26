@@ -65,7 +65,7 @@ class Match:
             if self.board.owner[neighbor] != destOwner:
                 continue
             c = self.board.connected(neighbor)
-            if c == full:
+            if (c == full).all():
                 break
             components.append(c)
         return components
@@ -102,30 +102,43 @@ class Match:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
 
-        assert self.board.playerContiguous(turn.player)
+        assert self.board.playerContiguous(turn.player.userid)
 
     def checkTurn(self, turn: Turn):
-        if self.board.owner[turn.source] != turn.player.playerid:
+        if self.board.owner[turn.source] != turn.player.userid:
             return False
+
         if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
             return False
-        adj = self.board.adjacent(turn.source)
-        if not (self.board.owner[adj] == turn.player.playerid).any():
+
+        adj = self.board.adjacent(turn.dest)
+        for a in adj:
+            if a == turn.source:
+                continue
+            if self.board.owner[a] == turn.player.userid:
+                break
+        else:
             return False
 
         destOwner = self.board.owner[turn.dest]
-        isEnemy = destOwner > MIN_PID and destOwner != turn.player.playerid
+        isEnemy = destOwner > MIN_PID and destOwner != turn.player.userid
         if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
             return False
 
-        if len(self.splitCreatedByTurn(turn.source, turn.player.playerid)) > 0:
+        if len(self.splitCreatedByTurn(turn.source, turn.player.userid)) > 0:
             return False
+
+        return True
+
+    def checkedTurn(self, turn):
+        if self.checkTurn(turn):
+            print("Executing turn:", turn)
+            return self.execTurn(turn)
 
     def turn(self):
         for user in self.users:
             turn = user.askTurn(self)
-            if self.checkTurn(turn):
-                self.execTurn(turn)
+            self.checkedTurn(turn)
             self.checkMatchFinished()
 
     def checkMatchFinished(self):
@@ -140,7 +153,7 @@ class Board:
         self.size = size
 
     def adjacent(self, d):
-        return np.array([(d[0], d[1]+1), (d[0], d[1]-1), (d[0]+1, d[1]), (d[0]-1, d[1])])
+        return [(d[0], d[1]+1), (d[0], d[1]-1), (d[0]+1, d[1]), (d[0]-1, d[1])]
 
     def connected(self, pos):
         owner = self.owner[pos]
@@ -148,7 +161,7 @@ class Board:
         component[pos] = True
         interesting = self.owner == owner
         value = -1
-        while True:
+        while interesting.any():
             previous_value = value
             value = np.sum(component)
             if previous_value == value:
@@ -157,13 +170,15 @@ class Board:
             component[:,1:] |= interesting[:,1:] & component[:,:-1]
             component[:-1,:] |= interesting[:-1,:] & component[1:,:]
             component[1:,:] |= interesting[1:,:] & component[:-1,:]
-        return np.where(component)
+        return component
 
-    def playerContiguous(self, player: User):
-        return self.ownedByPlayer(player) == self.connected(np.where(self.owner == player)[0])
+    def playerContiguous(self, player: int):
+        field = np.where(self.owner == player)
+        field = field[0][0], field[1][0]
+        return (self.ownedByPlayer(player) == self.connected(field)).all()
 
-    def ownedByPlayer(self, player: User):
-        return np.where(self.owner == player.userid)
+    def ownedByPlayer(self, player: int):
+        return self.owner == player
 
 if __name__ == '__main__':
     b = Board(40)
@@ -171,9 +186,9 @@ if __name__ == '__main__':
     u2 = User(1002, None)
     b.values[20:30,20:30] = 1
     b.owner[20:30,20:30] = u1.userid
-    t = Turn((20,22), (19,22))
+    t = Turn((20,22), (19,22), u1)
     m = Match([u1, u2], b)
-    m.execTurn(t)
+    m.checkedTurn(t)
     plt.imshow(b.owner.astype(np.float64)/10, clim=(0, 1005), interpolation="nearest", cmap="hot")
     plt.show()
 
