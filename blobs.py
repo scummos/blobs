@@ -6,7 +6,8 @@ import numpy as np
 
 class User:
     def __init__(self, userid, connection):
-        pass
+        self.connection = connection
+        self.userid = userid
 
     @staticmethod
     def login(username, password):
@@ -28,10 +29,10 @@ class User:
 
 class Lobby:
     def __init__(self):
-        pass
+        self.users = []
 
     def joinUser(self, user: User):
-        pass
+        self.users.append(user)
 
     def _match(self) -> Match:
         pass
@@ -41,11 +42,13 @@ class Lobby:
 
 class Turn:
     def __init__(self, source, dest):
-        pass
+        self.dest = dest
+        self.source = source
 
 class Match:
     def __init__(self, users, board):
-        pass
+        self.board = board
+        self.users = users
 
     def execTurn(self, turn):
         pass
