@@ -1,26 +1,42 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
-import sys
-
-import matplotlib.pyplot as plt
-import numpy as np
 
 NO_OWNER = 0
 FOOD_OWNER = 1
 MIN_PID = 1000
 
-class User:
-    def __init__(self, userid, connection):
-        self.connection = connection
+import sys
+import matplotlib.pyplot as plt
+import numpy as np
+import json
+from twisted.internet import protocol, reactor, endpoints
+
+class User(protocol.Protocol):
+    """
+    A dictionary of all valid network states with accepted requests.
+    Used for automated package validity checks.
+    """
+    network_states = {
+        # freshly connected user. No successful registration or login, yet.
+        "unauthorized": ["register", "login"],
+        # user is in lobby and awaits connection
+        "lobby": [],
+        "game": ["move"],
+    }
+    """
+    Required fields in the JSON dictionary forming each request.
+    Used for automated package validity checks.
+    """
+    request_fields = {
+        "register": ["user", "password"],
+        "login": ["user", "password"],
+        "move": ["from", "to"]
+    }
+    def __init__(self, userid, addr, lobby):
         self.userid = userid
-
-    @staticmethod
-    def login(username, password):
-        return User()
-
-    @staticmethod
-    def register(username, password):
-        pass
+        self.address = addr
+        self.lobby = lobby
+        self.network_state = "unauthorized"
 
     def sendMessage(self, message):
         pass
@@ -32,18 +48,99 @@ class User:
         self.sendMessage(match.stateString())
         return self.receiveTurnCommand()
 
-class Lobby:
+    def dataReceived(self, rawdata):
+        # internal check. Have we set the network state to a valid value?
+        if self.network_state not in User.network_states.keys():
+            raise Exception("Somewhere an invalid network state was set for user ID {}".format(self.userid))
+        try:
+            rawdata = rawdata.decode("utf8")
+            data = json.loads(rawdata)
+        except Exception as e:
+            print("Invalid JSON string received from UID {} via {}: {}\n{}".format(
+                self.userid, self.address, repr(rawdata), str(e))
+            )
+            self._sendErrorResponse("Invalid request, JSON/UTF8 error: {}".format(str(e)))
+            #self.transport.close()
+            return
+        # Is the request type known to the server, at all?
+        if data["type"] not in User.request_fields.keys():
+            self._sendErrorResponse("Unknown request")
+            return
+        # Is the request allowed in the current network state?
+        if data["type"] not in User.network_states[self.network_state]:
+            self._sendErrorResponse("Not allowed.")
+            return
+        # Are all required fields set?
+        for field in User.request_fields[data["type"]]:
+            if field not in data:
+                self._sendErrorResponse("Required field '{}' not found.".format(field))
+        # Dispatch user request to different subsytems
+        if data["type"] == "register":
+            if self.lobby.registerUser(data["user"], data["password"]):
+                self._sendSuccessResponse()
+                self.network_state = "lobby"
+            else:
+                self._sendErrorResponse("Username already taken.")
+        elif data["type"] == "login":
+            if self.lobby.checkUserLogin(data["user"], data["password"]):
+                self._sendSuccessResponse()
+                self.network_state = "lobby"
+            else:
+                self._sendErrorResponse("Invalid login credentials.")
+
+    def _sendErrorResponse(self, message):
+        pkg = {
+            "type": "response",
+            "status": "failure",
+            "message": message
+        }
+        self.transport.write(json.dumps(pkg).encode("utf8"))
+        
+    def _sendSuccessResponse(self, message="Ok."):
+        pkg = {
+            "type": "response",
+            "status": "success",
+            "message": message
+        }
+        self.transport.write(json.dumps(pkg).encode("utf8"))
+            
+
+class Lobby(protocol.Factory):
     def __init__(self):
-        self.users = []
+        self.user_db = {}
+        self.current_user_id = 1000 # lower IDs have special meanings ("no owner" etc)
+        self.loadUserDb()
+    
+    def registerUser(self, user, password):
+        if user in self.user_db:
+            return False
+        self.user_db[user] = {
+            "password": password,
+            "score": 0,
+        }
+        self.writeUserDb()
+        return True
+    
+    def checkUserLogin(self, user, password):
+        if user not in self.user_db:
+            return False
+        return self.user_db[user]["password"] == password
 
-    def joinUser(self, user: User):
-        self.users.append(user)
+    def writeUserDb(self):
+        with open("user.db", "w") as f:
+            f.write(json.dumps(self.user_db, indent=2))
 
-    def _match(self):
-        pass
+    def loadUserDb(self):
+        try:
+            with open("user.db") as f:
+                self.user_db = json.loads(f.read())
+        except IOError:
+            print("No user database found.")
 
-    def waitForPlayers(self):
-        pass
+    def buildProtocol(self, addr):
+        self.current_user_id += 1
+        return User(self.current_user_id, addr, self)
+            
 
 class Turn:
     def __init__(self, source, dest, player):
@@ -177,8 +274,10 @@ if __name__ == '__main__':
     plt.imshow(b.owner.astype(np.float64)/10, clim=(0, 1005), interpolation="nearest", cmap="hot")
     plt.show()
 
-    #l = Lobby()
-    #l.waitForPlayers()
+    l = Lobby()
+    endpoints.serverFromString(reactor, "tcp:1234").listen(l)
+    reactor.run()
+
 
 
 
