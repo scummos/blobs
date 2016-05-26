@@ -46,9 +46,10 @@ class Lobby:
         pass
 
 class Turn:
-    def __init__(self, source, dest):
+    def __init__(self, source, dest, player):
         self.dest = dest
         self.source = source
+        self.player = player
 
 class Match:
     def __init__(self, users, board):
@@ -56,14 +57,8 @@ class Match:
         self.board = board
         self.users = users
 
-    def execFight(self, turn, srcOwner, destOwner):
-        self.board.owner[turn.dest] = srcOwner
-        destValue = self.board.values[turn.dest]
-        srcValue = self.board.values[turn.source]
-        self.board.values[turn.dest] = srcValue - destValue - 1
-
-        d = turn.dest
-        neighbors = [(d[0], d[1]+1), (d[0], d[1]-1), (d[0]+1, d[1]), (d[0]-1, d[1])]
+    def splitCreatedByTurn(self, affectedPos, destOwner):
+        neighbors = self.board.adjacent(affectedPos)
         full = self.board.ownedByPlayer(destOwner)
         components = []
         for neighbor in neighbors:
@@ -73,10 +68,16 @@ class Match:
             if c == full:
                 break
             components.append(c)
-        else:
-            # player was split by move
-            if len(components) == 0:
-                return
+        return components
+
+    def execFight(self, turn, srcOwner, destOwner):
+        self.board.owner[turn.dest] = srcOwner
+        destValue = self.board.values[turn.dest]
+        srcValue = self.board.values[turn.source]
+        self.board.values[turn.dest] = srcValue - destValue - 1
+
+        components = self.splitCreatedByTurn(turn.dest, destOwner)
+        if len(components) > 0:
             sizes = [len(q) for q in components]
             largest = components[np.argmax(sizes)]
             for comp in components:
@@ -91,15 +92,34 @@ class Match:
         srcOwner = self.board.owner[turn.source]
         if destOwner == NO_OWNER or srcOwner == destOwner:
             self.board.values[turn.dest] += 1
+            self.board.owner[turn.dest] = srcOwner
             self.board.values[turn.source] -= 1
+            if self.board.values[turn.source] == 0:
+                self.board.owner[turn.source] = NO_OWNER
         elif destOwner == FOOD_OWNER:
             self.board.owner[turn.dest] = srcOwner
         else:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
 
-    def checkTurn(self, turn):
-        return True
+        assert self.board.playerContiguous(turn.player)
+
+    def checkTurn(self, turn: Turn):
+        if self.board.owner[turn.source] != turn.player.playerid:
+            return False
+        if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
+            return False
+        adj = self.board.adjacent(turn.source)
+        if not (self.board.owner[adj] == turn.player.playerid).any():
+            return False
+
+        destOwner = self.board.owner[turn.dest]
+        isEnemy = destOwner > MIN_PID and destOwner != turn.player.playerid
+        if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
+            return False
+
+        if len(self.splitCreatedByTurn(turn.source, turn.player.playerid)) > 0:
+            return False
 
     def turn(self):
         for user in self.users:
@@ -117,6 +137,10 @@ class Board:
     def __init__(self, size):
         self.values = np.zeros((size, size), dtype=np.uint16)
         self.owner = np.zeros_like(self.values)
+        self.size = size
+
+    def adjacent(self, d):
+        return np.array([(d[0], d[1]+1), (d[0], d[1]-1), (d[0]+1, d[1]), (d[0]-1, d[1])])
 
     def connected(self, pos):
         owner = self.owner[pos]
@@ -143,12 +167,14 @@ class Board:
 
 if __name__ == '__main__':
     b = Board(40)
-    b.values[20:30,20:30] = 7
-    b.owner[20:30,20:30] = 5
-    b.owner[20:32,27] = 0
-    connected = b.connected((22,22))
-    b.owner[connected] = 10
-    plt.imshow(b.owner.astype(np.float64)/10, clim=(0, 10), interpolation="nearest", cmap="hot")
+    u1 = User(1001, None)
+    u2 = User(1002, None)
+    b.values[20:30,20:30] = 1
+    b.owner[20:30,20:30] = u1.userid
+    t = Turn((20,22), (19,22))
+    m = Match([u1, u2], b)
+    m.execTurn(t)
+    plt.imshow(b.owner.astype(np.float64)/10, clim=(0, 1005), interpolation="nearest", cmap="hot")
     plt.show()
 
     #l = Lobby()
