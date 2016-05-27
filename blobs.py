@@ -95,7 +95,7 @@ class User(protocol.Protocol):
             "message": message
         }
         self.transport.write(json.dumps(pkg).encode("utf8"))
-        
+
     def _sendSuccessResponse(self, message="Ok."):
         pkg = {
             "type": "response",
@@ -103,14 +103,14 @@ class User(protocol.Protocol):
             "message": message
         }
         self.transport.write(json.dumps(pkg).encode("utf8"))
-            
+
 
 class Lobby(protocol.Factory):
     def __init__(self):
         self.user_db = {}
         self.current_user_id = 1000 # lower IDs have special meanings ("no owner" etc)
         self.loadUserDb()
-    
+
     def registerUser(self, user, password):
         if user in self.user_db:
             return False
@@ -120,7 +120,7 @@ class Lobby(protocol.Factory):
         }
         self.writeUserDb()
         return True
-    
+
     def checkUserLogin(self, user, password):
         if user not in self.user_db:
             return False
@@ -140,7 +140,7 @@ class Lobby(protocol.Factory):
     def buildProtocol(self, addr):
         self.current_user_id += 1
         return User(self.current_user_id, addr, self)
-            
+
 
 class Turn:
     def __init__(self, source, dest, player):
@@ -203,9 +203,11 @@ class Match:
 
     def checkTurn(self, turn: Turn):
         if self.board.owner[turn.source] != turn.player.userid:
+            print("invalid source owner")
             return False
 
         if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
+            print("invalid desination location")
             return False
 
         adj = self.board.adjacent(turn.dest)
@@ -215,22 +217,26 @@ class Match:
             if self.board.owner[a] == turn.player.userid:
                 break
         else:
+            print("no adjacent allied fields")
             return False
 
         destOwner = self.board.owner[turn.dest]
         isEnemy = destOwner > MIN_PID and destOwner != turn.player.userid
         if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
+            print("not enough points to DESTROY THE ENEMEY")
             return False
 
         if len(self.splitCreatedByTurn(turn.source, turn.player.userid)) > 0:
+            print("you would split yourself")
             return False
 
         return True
 
     def checkedTurn(self, turn):
         if self.checkTurn(turn):
-            print("Executing turn:", turn)
-            return self.execTurn(turn)
+            self.execTurn(turn)
+        else:
+            print("Invalid turn:", turn)
 
     def turn(self):
         for user in self.users:
@@ -279,19 +285,25 @@ class Board:
 
 if __name__ == '__main__':
     b = Board(40)
-    u1 = User(1001, None)
-    u2 = User(1002, None)
-    b.values[20:30,20:30] = 1
-    b.owner[20:30,20:30] = u1.userid
-    t = Turn((20,22), (19,22), u1)
+    l = Lobby()
+    u1 = User(1001, None, l)
+    u2 = User(1002, None, l)
     m = Match([u1, u2], b)
+    b.values[20:30,20:30] = 10
+    b.owner[20:30,20:30] = u1.userid
+    b.owner[28:35,30:35] = u2.userid
+    b.values[28:35,30:35] = 1
+
+    t = Turn((20,20), (19,22), u1)
     m.checkedTurn(t)
-    plt.imshow(b.owner.astype(np.float64)/10, clim=(0, 1005), interpolation="nearest", cmap="hot")
+    t = Turn((20,21), (28,30), u1)
+    m.checkedTurn(t)
+    plt.imshow(b.values.astype(np.float64), clim=(0, 10), interpolation="nearest", cmap="hot")
     plt.show()
 
-    l = Lobby()
-    endpoints.serverFromString(reactor, "tcp:1234").listen(l)
-    reactor.run()
+    #l = Lobby()
+    #endpoints.serverFromString(reactor, "tcp:1234").listen(l)
+    #reactor.run()
 
 
 
