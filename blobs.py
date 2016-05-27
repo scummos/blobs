@@ -21,7 +21,8 @@ class User(protocol.Protocol):
         "unauthorized": ["register", "login"],
         # user is in lobby and awaits connection
         "lobby": [],
-        "game": ["move"],
+        "game_waiting": [],
+        "game_your_turn": ["move"],
     }
     """
     Required fields in the JSON dictionary forming each request.
@@ -37,16 +38,30 @@ class User(protocol.Protocol):
         self.address = addr
         self.lobby = lobby
         self.network_state = "unauthorized"
+        self.currentMatch = None
+        self.username = None
 
-    def sendMessage(self, message):
-        pass
+    def connectionLost(self, reason):
+        self.lobby.notifyUserDisconnected(self)
 
-    def receiveTurnCommand(self):
-        pass
+    def matchStarted(self, match):
+        assert isinstance(match, Match)
+        self.network_state = "game_waiting"
+        self.currentMatch = match
 
-    def askTurn(self, match):
-        self.sendMessage(match.stateString())
-        return self.receiveTurnCommand()
+    def askTurn(self):
+        names = self.currentMatch.playerNames(self)
+        populated = self.currentMatch.board.populated()
+        owners = self.currentMatch.board.owner[populated]
+        values = self.currentMatch.board.values[populated]
+        pkg = {
+            "type": "your_turn",
+            "player_names": names,
+            "fields_used": populated,
+            "fields_owned_by": owners,
+            "fields_values": values
+        }
+        self.transport.write(json.dumps(pkg).encode("utf8"))
 
     def dataReceived(self, rawdata):
         # internal check. Have we set the network state to a valid value?
@@ -85,8 +100,22 @@ class User(protocol.Protocol):
             if self.lobby.checkUserLogin(data["user"], data["password"]):
                 self._sendSuccessResponse()
                 self.network_state = "lobby"
+                self.username = data["user"]
+                self.lobby.notifyUserConnected(self)
             else:
                 self._sendErrorResponse("Invalid login credentials.")
+        elif data["type"] == "move":
+            ok, message = self.currentMatch.checkedTurn(Turn(data["from"], data["to"], self))
+            if ok:
+                self._sendSuccessResponse(message)
+            else:
+                self._sendErrorResponse(message)
+            done = self.currentMatch.checkMatchFinished()
+            if done:
+                self.lobby.finalizeMatch(self.currentMatch)
+            else:
+                next = self.currentMatch.nextUser()
+                next.askTurn()
 
     def _sendErrorResponse(self, message):
         pkg = {
@@ -108,8 +137,35 @@ class User(protocol.Protocol):
 class Lobby(protocol.Factory):
     def __init__(self):
         self.user_db = {}
-        self.current_user_id = 1000 # lower IDs have special meanings ("no owner" etc)
+        self.current_user_id = MIN_PID # lower IDs have special meanings ("no owner" etc)
         self.loadUserDb()
+        self.activeUsers = []
+        self.activeMatches = []
+
+    def finalizeMatch(self, match):
+        for user in match.users:
+            user.transport.close()
+        self.activeMatches.remove(match)
+
+    def notifyUserConnected(self, user):
+        print("User connected to lobby:", user)
+        self.activeUsers.append(user)
+        idle = [u for u in self.activeUsers if u.network_state == "lobby"]
+        if len(idle) >= 4:
+            self.makeMatch(idle[:4])
+
+    def notifyUserDisconnected(self, user):
+        print("User disconnected from lobby:", user)
+        self.activeUsers.remove(user)
+
+    def makeMatch(self, users):
+        board = Board()
+        board.populate(users)
+        match = Match(users, board)
+        self.activeMatches.append(match)
+        for user in users:
+            user.matchStarted(match)
+        users[0].askTurn()
 
     def registerUser(self, user, password):
         if user in self.user_db:
@@ -153,6 +209,15 @@ class Match:
         assert isinstance(board, Board)
         self.board = board
         self.users = users
+        self.currentUser = self.users[0]
+
+    def nextUser(self) -> User:
+        i = (self.users.index(self.currentUser) + 1) % len(self.users)
+        self.currentUser = self.users[i]
+        return self.currentUser
+
+    def playerNames(self):
+        return [(u.username, u.playerid) for u in self.users]
 
     def splitCreatedByTurn(self, affectedPos, destOwner):
         neighbors = self.board.adjacent(affectedPos)
@@ -203,12 +268,10 @@ class Match:
 
     def checkTurn(self, turn: Turn):
         if self.board.owner[turn.source] != turn.player.userid:
-            print("invalid source owner")
-            return False
+            return False, "source field not populated by you"
 
         if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
-            print("invalid desination location")
-            return False
+            return False, "destination location out of bounds"
 
         adj = self.board.adjacent(turn.dest)
         for a in adj:
@@ -217,32 +280,23 @@ class Match:
             if self.board.owner[a] == turn.player.userid:
                 break
         else:
-            print("no adjacent allied fields")
-            return False
+            return False, "no adjacent allied fields at target location"
 
         destOwner = self.board.owner[turn.dest]
         isEnemy = destOwner > MIN_PID and destOwner != turn.player.userid
         if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
-            print("not enough points to DESTROY THE ENEMEY")
-            return False
+            return False, "you cannot attack fields stronger than you"
 
         if len(self.splitCreatedByTurn(turn.source, turn.player.userid)) > 0:
-            print("you would split yourself")
-            return False
+            return False, "you would split yourself"
 
-        return True
+        return True, "turn ok"
 
     def checkedTurn(self, turn):
-        if self.checkTurn(turn):
+        ok, message = self.checkTurn(turn)
+        if ok:
             self.execTurn(turn)
-        else:
-            print("Invalid turn:", turn)
-
-    def turn(self):
-        for user in self.users:
-            turn = user.askTurn(self)
-            self.checkedTurn(turn)
-            self.checkMatchFinished()
+        return ok, message
 
     def checkMatchFinished(self):
         owned_by_player = self.board.owner >= MIN_PID
@@ -282,6 +336,9 @@ class Board:
 
     def ownedByPlayer(self, player: int):
         return self.owner == player
+
+    def populated(self):
+        return np.where(self.owner != NO_OWNER)
 
 if __name__ == '__main__':
     b = Board(40)
