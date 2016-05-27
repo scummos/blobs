@@ -299,6 +299,11 @@ class Match:
             self.execFight(turn, srcOwner, destOwner)
         assert self.board.playerContiguous(turn.player.userid)
 
+    def paintTurn(self, out):
+        plt.imshow(self.board.owner.astype(np.float64), clim=(1000, 1005), interpolation="nearest", cmap="hot")
+        plt.savefig(out)
+        plt.clf()
+
     def checkTurn(self, turn: Turn):
         if self.board.owner[turn.source] != turn.player.userid:
             return False, "source field not populated by you"
