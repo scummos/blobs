@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import json
 import zlib
+import logging
 import binascii
 from twisted.internet import protocol, reactor, endpoints
 
@@ -40,6 +41,7 @@ class User(protocol.Protocol):
         "move": ["from", "to"]
     }
     def __init__(self, userid, addr, lobby):
+        self.logger = logging.getLogger("User({})".format(userid))
         self.userid = userid
         self.address = addr
         self.lobby = lobby
@@ -84,10 +86,11 @@ class User(protocol.Protocol):
             rawdata = rawdata.decode("utf8")
             data = json.loads(rawdata)
         except Exception as e:
-            print("Invalid JSON string received from UID {} via {}: {}\n{}".format(
-                self.userid, self.address, repr(rawdata), str(e))
+            self.logger.error("Invalid JSON string received from UID {} via {}\n{}".format(
+                self.userid, self.address, str(e))
             )
             self._sendErrorResponse("Invalid request, JSON/UTF8 error: {}".format(str(e)))
+            self.transport.loseConnection()
             #self.transport.close()
             return
         # Is the request type known to the server, at all?
@@ -149,6 +152,7 @@ class User(protocol.Protocol):
 
 class Lobby(protocol.Factory):
     def __init__(self):
+        self.logger = logging.getLogger("Lobby")
         self.user_db = {}
         self.current_user_id = MIN_PID # lower IDs have special meanings ("no owner" etc)
         self.loadUserDb()
@@ -172,7 +176,7 @@ class Lobby(protocol.Factory):
             pass
 
     def finalizeMatch(self, match):
-        print("Finalize match", match)
+        self.logger.info("Finalize match")
         for user in match.users:
             user.transport.loseConnection()
         specs = match.spectators[:]
@@ -199,21 +203,21 @@ class Lobby(protocol.Factory):
             self.addSpectator(spec)
 
     def notifyUserConnected(self, user):
-        print("User connected to lobby:", user)
+        self.logger.info("User connected to lobby: {}".format(user))
         self.activeUsers.append(user)
-        print("Users active:", len(self.activeUsers))
+        self.logger.debug("Users active: {}".format(len(self.activeUsers)))
         idle = [u for u in self.activeUsers if u.network_state == "lobby"]
-        print("Users idle:", len(idle))
+        self.logger.debug("Users idle: {}".format(len(idle)))
         if len(idle) >= PLAYERS_IN_MATCH:
             self.makeMatch(idle[:PLAYERS_IN_MATCH])
 
     def notifyUserDisconnected(self, user):
-        print("User disconnected from lobby:", user)
+        self.logger.info("User disconnected from lobby: {}".format(user))
         if user.network_state != "unauthorized":
             self.activeUsers.remove(user)
 
     def makeMatch(self, users):
-        print("Starting new match.")
+        self.logger.info("Starting new match.")
         board = Board(BOARD_SIZE)
         board.populate(users)
         match = Match(users, board)
@@ -248,7 +252,7 @@ class Lobby(protocol.Factory):
             with open("user.db") as f:
                 self.user_db = json.loads(f.read())
         except IOError:
-            print("No user database found.")
+            self.logger.info("No user database found.")
 
     def buildProtocol(self, addr):
         self.current_user_id += 1
@@ -264,6 +268,8 @@ class Turn:
 
 class Match:
     def __init__(self, users, board):
+        self.logger = logging.getLogger("Match({})".format(
+            ", ".join("{}({})".format(u.username, u.userid) for u in users)))
         assert isinstance(board, Board)
         self.board = board
         self.users = users
@@ -324,7 +330,7 @@ class Match:
                 self.board.owner[comp] = NO_OWNER
 
     def execTurn(self, turn: Turn):
-        print("Executing turn", self.current_round)
+        self.logger.debug("Executing turn {}".format(self.current_round))
         destOwner = self.board.owner[turn.dest]
         srcOwner = self.board.owner[turn.source]
         if destOwner == NO_OWNER or srcOwner == destOwner:
@@ -479,6 +485,7 @@ class Board:
 
 class MatchHistory:
     def __init__(self):
+        self.logger = logging.getLogger("MatchHistory")
         self.filename = "match.db"
         self.matches = []
         self.player_matches = {}
@@ -506,15 +513,15 @@ class MatchHistory:
         self.matches = []
         self.player_matches = {}
         self.current_match_id = 0
-        print("Loading matches…", end="")
+        self.logger.info("Loading matches…")
         try:
             with open(self.filename) as f:
                 for line in f:
                     match = json.loads(line)
                     self.addMatch(match, False)
-            print(" done! {} matches loaded".format(self.current_match_id))
+            self.logger.info(" … done! {} matches loaded".format(self.current_match_id))
         except IOError as e:
-            print(" cannot open database. {}".format(str(e)))
+            self.logger.info(" cannot open database. {}".format(str(e)))
 
     def addMatch(self, match_history, save_to_file=True):
         self.matches.append(match_history)
@@ -531,6 +538,7 @@ class MatchHistory:
 
 class Spectator(protocol.Protocol):
     def __init__(self, lobby, addr):
+        self.logger = logging.getLogger("Spectator({})".format(str(addr)))
         self.lobby = lobby
         self.addr = addr
         self.watchedMatch = None
@@ -563,7 +571,7 @@ class Spectator(protocol.Protocol):
             pass
 
     def connectionLost(self, reason):
-        print("Spectator disconnected: "+str(reason))
+        self.logger.info("Spectator disconnected: "+str(reason))
         self.stopSpectating()
 
     def dataReceived(self, rawdata):
@@ -614,7 +622,7 @@ class Spectator(protocol.Protocol):
                 self._sendErrorResponse("Unknown request.")
         except Exception as e:
             self._sendErrorResponse("Server Error :/")
-            print("Error while processing spectator request: {}".format(str(e)))
+            self.logger.error("Error while processing spectator request: {}".format(str(e)))
 
     def sendActiveMatch(self, match):
         pkg = { "type": "stream_turn" }
@@ -654,6 +662,22 @@ class SpectatorFactory(protocol.Factory):
 
 
 if __name__ == '__main__':
+    # create logger
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    formatter = logging.Formatter("%(name)s - %(levelname)s - %(message)s")
+
+    # create console handler and set level to debug
+    ch = logging.StreamHandler()
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
+
+    # create console handler and set level to debug
+    ch = logging.FileHandler("blobs.log", mode="w")
+    ch.setLevel(logging.INFO)
+    ch.setFormatter(formatter)
+    logger.addHandler(ch)
     #b = Board(40)
     #l = Lobby()
     #u1 = User(1001, None, l)
