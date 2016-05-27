@@ -120,9 +120,10 @@ class User(protocol.Protocol):
             else:
                 self._sendErrorResponse(message)
             self.network_state = "game_waiting"
-            done = self.currentMatch.checkMatchFinished()
+            done, winner = self.currentMatch.checkMatchFinished()
             if done:
                 self.lobby.finalizeMatch(self.currentMatch)
+                print("Player won:", winner)
             else:
                 next = self.currentMatch.nextUser()
                 next.askTurn()
@@ -275,7 +276,7 @@ class Match:
             sizes = [len(q) for q in components]
             largest = components[np.argmax(sizes)]
             for comp in components:
-                if comp == largest:
+                if (comp == largest).all():
                     continue
                 self.board.values[turn.dest] += np.sum(self.board.values[comp])
                 self.board.values[comp] = 0
@@ -344,7 +345,7 @@ class Match:
             return True
         owned_by_player = self.board.owner >= MIN_PID
         interesting = self.board.owner[owned_by_player]
-        return not interesting.any() or (interesting[0] == interesting).all()
+        return not interesting.any() or (interesting[0] == interesting).all(), interesting[0]
 
     def addStateToHistory(self):
         self.history["turns"].append(MatchHistory.encodeState(self.board.values, self.board.owner))

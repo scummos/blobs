@@ -1,3 +1,4 @@
+import random
 import socket
 import sys
 
@@ -45,11 +46,11 @@ while True:
     print("Num neighbors, best:", neigh, best)
     print(me, my_pid)
 
-    source = me[neigh.index(best)]
-    dist_to_food = [(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food]
+    source = random.choice(me)
+    dist_to_food = sorted([(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food])
     best_food = food[dist_to_food.index(min(dist_to_food))]
     dist_to_best = [(abs(best_food[0] - f[0]) + abs(best_food[1] - f[1])) for f in me]
-    move_to = me[dist_to_best.index(max(dist_to_best))]
+    move_to = me[dist_to_best.index(min(dist_to_best))]
     if move_to[0] > best_food[0]:
         dest = (move_to[0]-1, move_to[1])
     elif move_to[0] < best_food[0]:
@@ -59,10 +60,7 @@ while True:
     else:
         dest = (move_to[0], move_to[1]+1)
 
-    # compute actual source
-    source = me[dist_to_best.index(max(dist_to_best))]
-
-    print("Sending turn:", source, dest, "towards", best)
+    print("Sending turn:", source, dest, "towards", best_food)
     s.sendall('{{ "type": "move", "from": {0}, "to": {1} }}\n'.format(list(source), list(dest)).encode("utf8"))
     print("Reply:", s.recv(1024))
 
