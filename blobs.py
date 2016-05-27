@@ -467,6 +467,69 @@ class MatchHistory:
         self.current_match_id += 1
 
 
+class Spectator(protocol.Factory):
+    def __init__(self, lobby, addr):
+        self.lobby = lobby
+        self.addr = addr
+        self.watchedMatch = None
+
+    def stopSpectating():
+        if not self.watchedMatch:
+            return
+        self.watchedMatch.spectators.remove(self)
+
+    def connectionLost(self, reason):
+        print("Spectator disconnected: "+reason)
+        self.stopSpectating()
+
+    def dataReceived(self, rawdata):
+        try:
+            data = json.loads(rawdata.decode("utf8"))
+        except Exception as e:
+            self._sendErrorResponse("Error while parsing JSON package: {}".format(str(e)))
+        try:
+            if "type" not in data:
+                self._sendErrorResponse("Required 'type' field not found.")
+                return
+            if data["type"] == "get_match":
+                if "by_user" in data:
+                    pass
+                else:
+                    # recent 20 matches
+                    pass
+        except Exception as e:
+            self._sendErrorResponse("Server Error :/")
+            print("Error while processing spectator request: {}".format(str(e)))
+
+    def sendActiveMatch(self, match):
+        self.transport.write(json.dumps(match.history).encode("utf8"))
+
+    def _sendMessage(self, data):
+        self.transport.write(json.dumps(data).encode("utf8"))
+
+    def _sendErrorResponse(self, message):
+        self._sendMessage({
+            "type": "response",
+            "status": "failure",
+            "message": message
+        })
+
+    def _sendSuccessResponse(self, message="Ok."):
+        self._sendMessage({
+            "type": "response",
+            "status": "success",
+            "message": message
+        })
+
+
+class SpectatorFactory(protocol.Factory):
+    def __init__(self, lobby):
+        self.lobby = lobby
+
+    def buildProtocol(self, addr):
+        return Spectator(lobby, addr)
+
+
 if __name__ == '__main__':
     #b = Board(40)
     #l = Lobby()
@@ -487,6 +550,7 @@ if __name__ == '__main__':
 
     l = Lobby()
     endpoints.serverFromString(reactor, "tcp:1234").listen(l)
+    endpoints.serverFromString(reactor, "tcp:9001").listen(SpectatorFactory(l))
     reactor.run()
 
 
