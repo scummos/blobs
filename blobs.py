@@ -473,19 +473,19 @@ class MatchHistory:
         self.current_match_id += 1
 
 
-class Spectator(protocol.Factory):
+class Spectator(protocol.Protocol):
     def __init__(self, lobby, addr):
         self.lobby = lobby
         self.addr = addr
         self.watchedMatch = None
 
-    def stopSpectating():
+    def stopSpectating(self):
         if not self.watchedMatch:
             return
         self.watchedMatch.spectators.remove(self)
 
     def connectionLost(self, reason):
-        print("Spectator disconnected: "+reason)
+        print("Spectator disconnected: "+str(reason))
         self.stopSpectating()
 
     def dataReceived(self, rawdata):
@@ -497,12 +497,30 @@ class Spectator(protocol.Factory):
             if "type" not in data:
                 self._sendErrorResponse("Required 'type' field not found.")
                 return
-            if data["type"] == "get_match":
+            if data["type"] == "get_matches":
                 if "by_user" in data:
-                    pass
+                    user = data["by_user"]
+                    if user not in self.lobby.user_db.keys():
+                        self._sendErrorResponse("Unknown user.")
+                        return
+                    player_matches = self.lobby.history.player_matches
+                    matches = []
+                    if user in player_matches:
+                        matches = player_matches[user]
+                    self._sendSuccessResponse(message="Got it.", matches=matches)
                 else:
                     # recent 20 matches
-                    pass
+                    matches = []
+                    self._sendSuccessResponse(message="Got it.", matches=matches)
+            if data["type"] == "get_users":
+                users = {}
+                disallowed_keys = ["password"]
+                # no password :P
+                for user, data in self.lobby.user_db.items():
+                    users[user] = dict(
+                        (key, val) for key, val in data.items() if key not in disallowed_keys
+                    )
+                self._sendSuccessResponse(message="Yessir.", users=users)
         except Exception as e:
             self._sendErrorResponse("Server Error :/")
             print("Error while processing spectator request: {}".format(str(e)))
@@ -513,19 +531,23 @@ class Spectator(protocol.Factory):
     def _sendMessage(self, data):
         self.transport.write(json.dumps(data).encode("utf8"))
 
-    def _sendErrorResponse(self, message):
-        self._sendMessage({
+    def _sendErrorResponse(self, message, **kwargs):
+        pkg = {
             "type": "response",
             "status": "failure",
             "message": message
-        })
+        }
+        pkg.update(kwargs)
+        self._sendMessage(pkg)
 
-    def _sendSuccessResponse(self, message="Ok."):
-        self._sendMessage({
+    def _sendSuccessResponse(self, message="Ok.", **kwargs):
+        pkg = {
             "type": "response",
             "status": "success",
             "message": message
-        })
+        }
+        pkg.update(kwargs)
+        self._sendMessage(pkg)
 
 
 class SpectatorFactory(protocol.Factory):
@@ -533,7 +555,7 @@ class SpectatorFactory(protocol.Factory):
         self.lobby = lobby
 
     def buildProtocol(self, addr):
-        return Spectator(lobby, addr)
+        return Spectator(self.lobby, addr)
 
 
 if __name__ == '__main__':
