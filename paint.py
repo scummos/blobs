@@ -35,12 +35,14 @@ class GameField:
         print("update called")
         own = list(np.unique(owners))[1:]
         print(owners, own)
+        noBrush = QBrush(Qt.NoBrush)
         for index, owner, value in zip(range(size**2), owners.flat, values.flat):
             if owner == 0:
-                continue
-            k = colors[own.index(owner)]
-            color = QtGui.QColor(k[0], k[1], k[2], int(255./np.max(values)*value) if owner >= 1000 else 255)
-            brush = QBrush(color)
+                brush = noBrush
+            else:
+                k = colors[own.index(owner)]
+                color = QtGui.QColor(k[0], k[1], k[2], int(255./np.max(values)*value) if owner >= 1000 else 255)
+                brush = QBrush(color)
             item = self.rectItems[index]
             item.setBrush(brush)
         self.scene.update(self.scene.sceneRect())
