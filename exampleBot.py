@@ -48,7 +48,7 @@ while True:
     print(me, my_pid)
 
     source = random.choice(me)
-    dist_to_food = sorted([(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food])
+    dist_to_food = [(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food]
     best_food = food[dist_to_food.index(min(dist_to_food))]
     dist_to_best = [(abs(best_food[0] - f[0]) + abs(best_food[1] - f[1])) for f in me]
     move_to = me[dist_to_best.index(min(dist_to_best))]
