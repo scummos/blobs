@@ -158,7 +158,7 @@ class Lobby(protocol.Factory):
         idle = [u for u in self.activeUsers if u.network_state == "lobby"]
         print("Users idle:", len(idle))
         if len(idle) >= PLAYERS_IN_MATCH:
-            self.makeMatch(idle[:4])
+            self.makeMatch(idle[:PLAYERS_IN_MATCH])
 
     def notifyUserDisconnected(self, user):
         print("User disconnected from lobby:", user)
@@ -166,6 +166,7 @@ class Lobby(protocol.Factory):
             self.activeUsers.remove(user)
 
     def makeMatch(self, users):
+        print("Starting new match.")
         board = Board(BOARD_SIZE)
         board.populate(users)
         match = Match(users, board)
