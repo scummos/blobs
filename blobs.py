@@ -493,11 +493,21 @@ class Spectator(protocol.Protocol):
             data = json.loads(rawdata.decode("utf8"))
         except Exception as e:
             self._sendErrorResponse("Error while parsing JSON package: {}".format(str(e)))
+            return
         try:
             if "type" not in data:
                 self._sendErrorResponse("Required 'type' field not found.")
                 return
-            if data["type"] == "get_matches":
+            if data["type"] == "get_historic_match":
+                if "match_id" not in data:
+                    self._sendErrorResponse("match_id not supplied.")
+                    return
+                mid = data["match_id"]
+                if mid >= len(self.lobby.history.matches) or mid < 0:
+                    self._sendErrorResponse("404 match not found.")
+                    return
+                self._sendSuccessResponse(message="Fuck yes.", match=self.lobby.history.matches[mid])
+            elif data["type"] == "get_historic_match_list":
                 if "by_user" in data:
                     user = data["by_user"]
                     if user not in self.lobby.user_db.keys():
@@ -509,10 +519,9 @@ class Spectator(protocol.Protocol):
                         matches = player_matches[user]
                     self._sendSuccessResponse(message="Got it.", matches=matches)
                 else:
-                    # recent 20 matches
-                    matches = []
+                    matches = list(range(len(self.lobby.history.matches)))
                     self._sendSuccessResponse(message="Got it.", matches=matches)
-            if data["type"] == "get_users":
+            elif data["type"] == "get_users":
                 users = {}
                 disallowed_keys = ["password"]
                 # no password :P
@@ -521,6 +530,8 @@ class Spectator(protocol.Protocol):
                         (key, val) for key, val in data.items() if key not in disallowed_keys
                     )
                 self._sendSuccessResponse(message="Yessir.", users=users)
+            elif data["type"] == "stream_game":
+                pass
         except Exception as e:
             self._sendErrorResponse("Server Error :/")
             print("Error while processing spectator request: {}".format(str(e)))
