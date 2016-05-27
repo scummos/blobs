@@ -40,9 +40,9 @@ class User(protocol.Protocol):
         "login": ["user", "password"],
         "move": ["from", "to"]
     }
-    def __init__(self, userid, addr, lobby):
-        self.logger = logging.getLogger("User({})".format(userid))
-        self.userid = userid
+    def __init__(self, connection_id, addr, lobby):
+        self.logger = logging.getLogger("User(id={})".format(connection_id))
+        self.connection_id = connection_id
         self.address = addr
         self.lobby = lobby
         self.network_state = "unauthorized"
@@ -50,7 +50,7 @@ class User(protocol.Protocol):
         self.username = None
 
     def __str__(self):
-        return "User(id={}, name={})".format(self.userid, self.username)
+        return "User(id={}, name={})".format(self.connection_id, self.username)
 
     def connectionLost(self, reason):
         self.lobby.notifyUserDisconnected(self)
@@ -81,13 +81,13 @@ class User(protocol.Protocol):
     def dataReceived(self, rawdata):
         # internal check. Have we set the network state to a valid value?
         if self.network_state not in User.network_states.keys():
-            raise Exception("Somewhere an invalid network state was set for user ID {}".format(self.userid))
+            raise Exception("Somewhere an invalid network state was set for connection ID {}".format(self.connection_id))
         try:
             rawdata = rawdata.decode("utf8")
             data = json.loads(rawdata)
         except Exception as e:
-            self.logger.error("Invalid JSON string received from UID {} via {}\n{}".format(
-                self.userid, self.address, str(e))
+            self.logger.error("Invalid JSON string received from connection ID {} via {}\n{}".format(
+                self.connection_id, self.address, str(e))
             )
             self._sendErrorResponse("Invalid request, JSON/UTF8 error: {}".format(str(e)))
             self.transport.loseConnection()
@@ -128,7 +128,7 @@ class User(protocol.Protocol):
             self.network_state = "game_waiting"
             done, winner = self.currentMatch.checkMatchFinished()
             if done:
-                self.lobby.finalizeMatch(self.currentMatch)
+                self.finalize()
             else:
                 next = self.currentMatch.nextUser()
                 next.askTurn()
@@ -174,33 +174,6 @@ class Lobby(protocol.Factory):
             self.waiting_spectators.remove(spectator)
         except ValueError:
             pass
-
-    def finalizeMatch(self, match):
-        self.logger.info("Finalize match")
-        for user in match.users:
-            user.transport.loseConnection()
-        specs = match.spectators[:]
-        for spec in match.spectators:
-            spec.streamFinished()
-        done, winner = match.checkMatchFinished()
-        match.history["status"] = "finished"
-        if winner:
-            match.history["winner"] = winner.username
-        else:
-            winner = match.getLargestPlayer()
-            if winner:
-                match.history["winner"] = winner.username
-            match.history["score"] = dict((user.username, score) for user, score in match.getPlayerSizes().items())
-        if match.history["winner"]:
-            self.user_db[match.history["winner"]]["score"] += 1
-            self.writeUserDb()
-        match.addStateToHistory()
-        for spectator in match.spectators:
-            spectator.sendActiveMatch(self)
-        self.history.addMatch(match.history)
-        self.activeMatches.remove(match)
-        for spec in specs:
-            self.addSpectator(spec)
 
     def notifyUserConnected(self, user):
         self.logger.info("User connected to lobby: {}".format(user))
@@ -269,7 +242,7 @@ class Turn:
 class Match:
     def __init__(self, users, board):
         self.logger = logging.getLogger("Match({})".format(
-            ", ".join("{}({})".format(u.username, u.userid) for u in users)))
+            ", ".join("{}({})".format(u.username, u.connection_id) for u in users)))
         assert isinstance(board, Board)
         self.board = board
         self.users = users
@@ -285,9 +258,37 @@ class Match:
         self.spectators = []
         self.addStateToHistory()
 
+
+    def finalize(self):
+        self.logger.info("Finalize")
+        for user in self.users:
+            user.transport.loseConnection()
+        specs = self.spectators[:]
+        for spec in self.spectators:
+            spec.streamFinished()
+        done, winner = self.checkMatchFinished()
+        self.history["status"] = "finished"
+        if winner:
+            self.history["winner"] = winner.username
+        else:
+            winner = self.getLargestPlayer()
+            if winner:
+                self.history["winner"] = winner.username
+            self.history["score"] = dict((user.username, score) for user, score in self.getPlayerSizes().items())
+        if self.history["winner"]:
+            self.user_db[self.history["winner"]]["score"] += 1
+            self.writeUserDb()
+        self.addStateToHistory()
+        for spectator in self.spectators:
+            spectator.sendActiveMatch(self)
+        self.lobby.history.addMatch(self.history)
+        self.lobby.activeMatches.remove(self)
+        for spec in specs:
+            self.lobby.addSpectator(spec)
+
     def getUserById(self, uid):
         for user in self.users:
-            if user.userid == uid:
+            if user.connection_id == uid:
                 return user
         return None
 
@@ -297,7 +298,7 @@ class Match:
         return self.currentUser
 
     def playerNames(self):
-        return [(u.username, u.userid) for u in self.users]
+        return [(u.username, u.connection_id) for u in self.users]
 
     def splitCreatedByTurn(self, affectedPos, destOwner):
         neighbors = self.board.adjacent(affectedPos)
@@ -344,7 +345,7 @@ class Match:
         else:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
-        assert self.board.playerContiguous(turn.player.userid)
+        assert self.board.playerContiguous(turn.player.connection_id)
 
     def paintTurn(self, out):
         plt.imshow(self.board.owner.astype(np.float64), clim=(1000, 1005), interpolation="nearest", cmap="hot")
@@ -352,33 +353,33 @@ class Match:
         plt.clf()
 
     def checkTurn(self, turn: Turn):
-        if self.board.owner[turn.source] != turn.player.userid:
+        if self.board.owner[turn.source] != turn.player.connection_id:
             return False, "source field not populated by you"
 
         if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
             return False, "destination location out of bounds"
 
-        if self.board.owner[turn.dest] != turn.player.userid:
+        if self.board.owner[turn.dest] != turn.player.connection_id:
             adj = self.board.adjacent(turn.dest)
             for a in adj:
                 if a == turn.source and self.board.values[turn.source] == 1:
                     continue
-                if self.board.owner[a] == turn.player.userid:
+                if self.board.owner[a] == turn.player.connection_id:
                     break
             else:
                 return False, "no adjacent allied fields at target location"
 
         destOwner = self.board.owner[turn.dest]
-        isEnemy = destOwner > MIN_PID and destOwner != turn.player.userid
+        isEnemy = destOwner > MIN_PID and destOwner != turn.player.connection_id
         if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
             return False, "you cannot attack fields stronger than you"
 
         if self.board.values[turn.source] == 1:
             self.board.owner[turn.source] = NO_OWNER
-        if not self.board.playerContiguous(turn.player.userid):
-            self.board.owner[turn.source] = turn.player.userid
+        if not self.board.playerContiguous(turn.player.connection_id):
+            self.board.owner[turn.source] = turn.player.connection_id
             return False, "you would split yourself"
-        self.board.owner[turn.source] = turn.player.userid
+        self.board.owner[turn.source] = turn.player.connection_id
 
         return True, "turn ok"
 
@@ -410,7 +411,7 @@ class Match:
     def getPlayerSizes(self):
         sizes = {}
         for user in self.users:
-            size = int(np.sum(self.board.values[self.board.owner == user.userid]))
+            size = int(np.sum(self.board.values[self.board.owner == user.connection_id]))
             sizes[user] = size
         return sizes
 
@@ -422,7 +423,7 @@ class Match:
             next = self.nextUser()
             next.askTurn()
         self.users.remove(user)
-        mask = self.board.owner == user.userid
+        mask = self.board.owner == user.connection_id
         self.board.values[mask] = 0
         self.board.owner[mask] = NO_OWNER
 
@@ -446,9 +447,9 @@ class Board:
         for user in users:
             start = self.random_free_field()
             self.values[start] = 1
-            self.owner[start] = user.userid
+            self.owner[start] = user.connection_id
             self.values[start[0]+1,start[1]] = 1
-            self.owner[start[0]+1,start[1]] = user.userid
+            self.owner[start[0]+1,start[1]] = user.connection_id
         for food in range(np.random.poisson(int(FOOD_ABUNDANCE * BOARD_SIZE**2))):
             field = self.random_free_field()
             self.values[field] = 1
@@ -684,8 +685,8 @@ if __name__ == '__main__':
     #u2 = User(1002, None, l)
     #m = Match([u1, u2], b)
     #b.values[20:30,20:30] = 10
-    #b.owner[20:30,20:30] = u1.userid
-    #b.owner[28:35,30:35] = u2.userid
+    #b.owner[20:30,20:30] = u1.connection_id
+    #b.owner[28:35,30:35] = u2.connection_id
     #b.values[28:35,30:35] = 1
 
     #t = Turn((20,20), (19,22), u1)
