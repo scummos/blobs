@@ -128,7 +128,7 @@ class User(protocol.Protocol):
             self.network_state = "game_waiting"
             done, winner = self.currentMatch.checkMatchFinished()
             if done:
-                self.finalize()
+                self.currentMatch.finalize()
             else:
                 next = self.currentMatch.nextUser()
                 next.askTurn()
