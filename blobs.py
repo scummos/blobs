@@ -15,7 +15,7 @@ MIN_PID = 1000
 PLAYERS_IN_MATCH = 2
 BOARD_SIZE = 64
 FOOD_ABUNDANCE = 0.01
-MAX_ROUNDS = 1000
+MAX_ROUNDS = 5000
 
 class User(protocol.Protocol):
     """
@@ -347,7 +347,7 @@ class Match:
 
     def checkMatchFinished(self):
         if self.current_round >= MAX_ROUNDS:
-            return True
+            return True, None
         owned_by_player = self.board.owner >= MIN_PID
         interesting = self.board.owner[owned_by_player]
         return not interesting.any() or (interesting[0] == interesting).all(), interesting[0]
