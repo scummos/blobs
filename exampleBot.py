@@ -9,7 +9,7 @@ FOOD_OWNER = 1
 
 PLAYER_NAME = sys.argv[1]
 
-HOST = 'localhost'
+HOST = '94.45.244.97'
 PORT = 1234
 s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 s.connect((HOST, PORT))

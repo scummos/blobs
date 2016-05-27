@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import socket
 # -*- coding: UTF-8 -*-
 import sys
 
@@ -6,8 +7,11 @@ import numpy as np
 
 from PyQt5.QtWidgets import QGraphicsScene, QGraphicsView, QGraphicsRectItem, QGraphicsScene
 from PyQt5.QtGui import QBrush, QColor, QPen, QPixmap, QGuiApplication, QPainter
-from PyQt5.QtCore import Qt, QSize, QRectF
+from PyQt5.QtCore import Qt, QSize, QRectF, pyqtSignal, pyqtSlot
 from PyQt5 import QtWidgets, QtCore, QtGui
+
+import json
+import blobs
 
 colors = [(0, 0, 0), (255, 0, 0), (100, 255, 100), (100, 100, 255), (255, 0, 177)]
 
@@ -16,10 +20,10 @@ class GameField:
         self.rectItems = []
         self.pixmap = QPixmap(QSize(820,820))
         self.painter = QPainter(self.pixmap)
+        self.scene = scene
         pen = QPen()
         pen.setStyle(Qt.NoPen)
-        own = list(np.unique(owners))
-        for index, (owner, value) in enumerate(zip(owners.flat, values.flat)):
+        for index in range(size**2):
             item = QGraphicsRectItem()
             item.setRect(int(index/size), int(index%size), 0.9, 0.9)
             k = colors[own.index(owner)]
@@ -84,10 +88,46 @@ class GameField:
                 </html>\n""")
             f.close()
 
+
+    def update(self, owners, values):
+        own = list(np.unique(owners))
+        for index, (owner, value) in enumerate(zip(owners.flat, values.flat)):
+            color = QtGui.QColor(*colors[own.index(owner)], value*8 if owner >= 1000 else 255)
+            brush = QBrush(color)
+            item.setBrush(brush)
+
+class NetworkInterface(QtCore.QObject):
+    dataReceived = pyqtSignal(np.ndarray, np.ndarray)
+
+    def __init__(self):
+        HOST = 'localhost'
+        PORT = 9001
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.sock.connect((HOST, PORT))
+        self.sock.send('{"type": "stream_game"}')
+
+    def run(self):
+        while True:
+            self.loop()
+
+    def loop(self):
+        buf = b""
+        while len(buf) == 0 or buf[-1] != ord('}'):
+            data = self.sock.recv(1024)
+            if len(data) == 0:
+                print("Connection closed")
+                exit(1)
+            buf += data
+        data = json.loads(data.decode("utf8"))
+        values, owner = blobs.MatchHistory.decodeState(data["board_size"], data["turn"])
+        self.dataReceived.emit(values, owner)
+
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     w = QtWidgets.QWidget()
     v = QGraphicsView()
+
+    iface = NetworkInterface()
 
     scene = QGraphicsScene(v)
     v.setRenderHints(QtGui.QPainter.HighQualityAntialiasing)
@@ -105,6 +145,7 @@ if __name__ == '__main__':
                       scene)
     field.outputPng()
     field.outputScorePage(owners,values, names, ids)
+    iface.dataReceived.connect(field.update)
 
     w.setLayout(QtWidgets.QHBoxLayout())
     w.resize(800, 600)
