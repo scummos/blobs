@@ -153,17 +153,36 @@ class Lobby(protocol.Factory):
         self.activeUsers = []
         self.activeMatches = []
         self.history = MatchHistory()
+        self.waiting_spectators = []
+
+    def addSpectator(self, spectator):
+        if self.activeMatches:
+            self.activeMatches[0].spectators.append(spectator)
+            spectator.startSpectating(self.activeMatches[0])
+        else:
+            self.waiting_spectators.append(spectator)
+
+    def removeSpectator(self, spectator):
+        spectator.stopSpectating()
+        try:
+            self.waiting_spectators.remove(spectator)
+        except ValueError:
+            pass
 
     def finalizeMatch(self, match):
+        print("Finalize match", match)
         for user in match.users:
             user.transport.loseConnection()
+        specs = match.spectators[:]
         for spec in match.spectators:
-            spec.stopSpectating()
+            spec.streamFinished()
         match.status = "finished"
         #match.winner
         # TODO fill in winner
         self.history.addMatch(match.history)
         self.activeMatches.remove(match)
+        for spec in specs:
+            self.addSpectator(spec)
 
     def notifyUserConnected(self, user):
         print("User connected to lobby:", user)
@@ -188,6 +207,8 @@ class Lobby(protocol.Factory):
         for user in users:
             user.matchStarted(match)
         users[0].askTurn()
+        for spec in self.waiting_spectators:
+            spec.startSpectating(match)
 
     def registerUser(self, user, password):
         if user in self.user_db:
@@ -283,7 +304,7 @@ class Match:
                 self.board.owner[comp] = NO_OWNER
 
     def execTurn(self, turn: Turn):
-        print("Executing turn:", turn)
+        print("Executing turn", self.current_round)
         destOwner = self.board.owner[turn.dest]
         srcOwner = self.board.owner[turn.source]
         if destOwner == NO_OWNER or srcOwner == destOwner:
@@ -340,9 +361,9 @@ class Match:
         self.current_round += 1
         if ok:
             self.execTurn(turn)
-            self.addStateToHistory()
-            for spectator in self.spectators:
-                spectator.sendActiveMatch(self)
+        self.addStateToHistory()
+        for spectator in self.spectators:
+            spectator.sendActiveMatch(self)
         return ok, message
 
     def checkMatchFinished(self):
@@ -479,10 +500,32 @@ class Spectator(protocol.Protocol):
         self.addr = addr
         self.watchedMatch = None
 
+    def startSpectating(self, match):
+        assert(self.watchedMatch is None)
+        self.watchedMatch = match
+        try:
+            self.lobby.waiting_spectators.remove(self)
+        except ValueError:
+            pass
+        self.watchedMatch.spectators.append(self)
+        self._sendMessage({"type":"start_stream"})
+
+    def streamFinished(self):
+        self._sendMessage({"type":"stream_finished", "message":"Match is finished."})
+        try:
+            self.watchedMatch.spectators.remove(self)
+        except ValueError:
+            pass
+        self.watchedMatch = None
+
     def stopSpectating(self):
-        if not self.watchedMatch:
-            return
-        self.watchedMatch.spectators.remove(self)
+        if self.watchedMatch:
+            self.watchedMatch.spectators.remove(self)
+            self.watchedMatch = None
+        try:
+            self.lobby.waiting_spectators.remove(self)
+        except ValueError:
+            pass
 
     def connectionLost(self, reason):
         print("Spectator disconnected: "+str(reason))
@@ -531,16 +574,22 @@ class Spectator(protocol.Protocol):
                     )
                 self._sendSuccessResponse(message="Yessir.", users=users)
             elif data["type"] == "stream_game":
-                pass
+                self.lobby.addSpectator(self)
+            else:
+                self._sendErrorResponse("Unknown request.")
         except Exception as e:
             self._sendErrorResponse("Server Error :/")
             print("Error while processing spectator request: {}".format(str(e)))
 
     def sendActiveMatch(self, match):
-        self.transport.write(json.dumps(match.history).encode("utf8"))
+        pkg = { "type": "stream_turn" }
+        pkg.update(match.history)
+        pkg["turn"] = pkg["turns"][-1]
+        del pkg["turns"]
+        self._sendMessage(pkg)
 
     def _sendMessage(self, data):
-        self.transport.write(json.dumps(data).encode("utf8"))
+        self.transport.write(json.dumps(data).encode("utf8")+b"\n")
 
     def _sendErrorResponse(self, message, **kwargs):
         pkg = {
