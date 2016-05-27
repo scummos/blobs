@@ -58,6 +58,7 @@ class User(protocol.Protocol):
         owners = self.currentMatch.board.owner[populated]
         values = self.currentMatch.board.values[populated]
         used = [(int(x), int(y)) for x, y in zip(populated[0], populated[1])]
+        self.network_state = "game_your_turn"
         pkg = {
             "type": "your_turn",
             "player_names": names,
@@ -114,6 +115,7 @@ class User(protocol.Protocol):
                 self._sendSuccessResponse(message)
             else:
                 self._sendErrorResponse(message)
+            self.network_state = "game_waiting"
             done = self.currentMatch.checkMatchFinished()
             if done:
                 self.lobby.finalizeMatch(self.currentMatch)
@@ -208,9 +210,10 @@ class Lobby(protocol.Factory):
 
 class Turn:
     def __init__(self, source, dest, player):
-        self.dest = dest
-        self.source = source
+        self.dest = int(dest[0]), int(dest[1])
+        self.source = int(source[0]), int(source[1])
         self.player = player
+
 
 class Match:
     def __init__(self, users, board):
@@ -258,6 +261,7 @@ class Match:
                 self.board.owner[comp] = NO_OWNER
 
     def execTurn(self, turn: Turn):
+        print("Executing turn:", turn)
         destOwner = self.board.owner[turn.dest]
         srcOwner = self.board.owner[turn.source]
         if destOwner == NO_OWNER or srcOwner == destOwner:
@@ -281,22 +285,27 @@ class Match:
         if (0 > turn.dest[0] >= self.board.size) or (0 > turn.dest[1] >= self.board.size):
             return False, "destination location out of bounds"
 
-        adj = self.board.adjacent(turn.dest)
-        for a in adj:
-            if a == turn.source:
-                continue
-            if self.board.owner[a] == turn.player.userid:
-                break
-        else:
-            return False, "no adjacent allied fields at target location"
+        if self.board.owner[turn.dest] != turn.player.userid:
+            adj = self.board.adjacent(turn.dest)
+            for a in adj:
+                if a == turn.source and self.board.values[turn.source] == 1:
+                    continue
+                if self.board.owner[a] == turn.player.userid:
+                    break
+            else:
+                return False, "no adjacent allied fields at target location"
 
         destOwner = self.board.owner[turn.dest]
         isEnemy = destOwner > MIN_PID and destOwner != turn.player.userid
         if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
             return False, "you cannot attack fields stronger than you"
 
-        if len(self.splitCreatedByTurn(turn.source, turn.player.userid)) > 0:
+        if self.board.values[turn.source] == 1:
+            self.board.owner[turn.source] = NO_OWNER
+        if not self.board.playerContiguous(turn.player.userid):
+            self.board.owner[turn.source] = turn.player.userid
             return False, "you would split yourself"
+        self.board.owner[turn.source] = turn.player.userid
 
         return True, "turn ok"
 
@@ -322,7 +331,7 @@ class Board:
 
     def random_free_field(self):
         while True:
-            x, y = np.random.randint(0, BOARD_SIZE), np.random.randint(0, BOARD_SIZE)
+            x, y = np.random.randint(0, BOARD_SIZE-1), np.random.randint(0, BOARD_SIZE-1)
             if self.owner[x][y] == NO_OWNER:
                 return x, y
 
@@ -331,6 +340,8 @@ class Board:
             start = self.random_free_field()
             self.values[start] = 1
             self.owner[start] = user.userid
+            self.values[start[0]+1,start[1]] = 1
+            self.owner[start[0]+1,start[1]] = user.userid
         for food in range(np.random.poisson(int(FOOD_ABUNDANCE * BOARD_SIZE**2))):
             field = self.random_free_field()
             self.values[field] = 1
