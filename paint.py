@@ -21,6 +21,8 @@ class GameField:
         self.pixmap = QPixmap(QSize(820,820))
         self.painter = QPainter(self.pixmap)
         self.scene = scene
+        self.owners = None
+        self.values = None
         pen = QPen()
         pen.setStyle(Qt.NoPen)
         for index in range(size**2):
@@ -34,17 +36,24 @@ class GameField:
     def update(self, size, owners, values):
         print("update called")
         own = list(np.unique(owners))[1:]
-        print(owners, own)
         noBrush = QBrush(Qt.NoBrush)
-        for index, owner, value in zip(range(size**2), owners.flat, values.flat):
-            if owner == 0:
-                brush = noBrush
-            else:
-                k = colors[own.index(owner)]
-                color = QtGui.QColor(k[0], k[1], k[2], int(255./np.max(values)*value) if owner >= 1000 else 255)
-                brush = QBrush(color)
-            item = self.rectItems[index]
-            item.setBrush(brush)
+        first = False
+        if self.owners is None or self.values is None:
+            first = True
+            self.owners = owners
+            self.values = values
+        for index, owner, value, cur_owner, cur_value in zip(range(size**2), owners.flat, values.flat, self.owners.flat, self.values.flat):
+            if first or (cur_owner != owner or cur_value != value):
+                if owner == 0:
+                    brush = noBrush
+                else:
+                    k = colors[own.index(owner)]
+                    color = QtGui.QColor(k[0], k[1], k[2], int(255./np.max(values)*value) if owner >= 1000 else 255)
+                    brush = QBrush(color)
+                item = self.rectItems[index]
+                item.setBrush(brush)
+        self.owners = owners
+        self.values = values
         self.scene.update(self.scene.sceneRect())
 
     def outputPng(self):
