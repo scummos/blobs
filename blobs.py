@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 # -*- coding: UTF-8 -*-
 
-NO_OWNER = 0
-FOOD_OWNER = 1
-MIN_PID = 1000
-
 import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import json
 from twisted.internet import protocol, reactor, endpoints
+
+NO_OWNER = 0
+FOOD_OWNER = 1
+MIN_PID = 1000
+PLAYERS_IN_MATCH = 2
+BOARD_SIZE = 64
+FOOD_ABUNDANCE = 0.01
 
 class User(protocol.Protocol):
     """
@@ -50,16 +53,17 @@ class User(protocol.Protocol):
         self.currentMatch = match
 
     def askTurn(self):
-        names = self.currentMatch.playerNames(self)
+        names = self.currentMatch.playerNames()
         populated = self.currentMatch.board.populated()
         owners = self.currentMatch.board.owner[populated]
         values = self.currentMatch.board.values[populated]
+        used = [(int(x), int(y)) for x, y in zip(populated[0], populated[1])]
         pkg = {
             "type": "your_turn",
             "player_names": names,
-            "fields_used": populated,
-            "fields_owned_by": owners,
-            "fields_values": values
+            "fields_used": used,
+            "fields_owned_by": [int(x) for x in owners],
+            "fields_values": [int(x) for x in values]
         }
         self.transport.write(json.dumps(pkg).encode("utf8"))
 
@@ -150,16 +154,19 @@ class Lobby(protocol.Factory):
     def notifyUserConnected(self, user):
         print("User connected to lobby:", user)
         self.activeUsers.append(user)
+        print("Users active:", len(self.activeUsers))
         idle = [u for u in self.activeUsers if u.network_state == "lobby"]
-        if len(idle) >= 4:
+        print("Users idle:", len(idle))
+        if len(idle) >= PLAYERS_IN_MATCH:
             self.makeMatch(idle[:4])
 
     def notifyUserDisconnected(self, user):
         print("User disconnected from lobby:", user)
-        self.activeUsers.remove(user)
+        if user.network_state != "unauthorized":
+            self.activeUsers.remove(user)
 
     def makeMatch(self, users):
-        board = Board()
+        board = Board(BOARD_SIZE)
         board.populate(users)
         match = Match(users, board)
         self.activeMatches.append(match)
@@ -217,7 +224,7 @@ class Match:
         return self.currentUser
 
     def playerNames(self):
-        return [(u.username, u.playerid) for u in self.users]
+        return [(u.username, u.userid) for u in self.users]
 
     def splitCreatedByTurn(self, affectedPos, destOwner):
         neighbors = self.board.adjacent(affectedPos)
@@ -312,6 +319,22 @@ class Board:
     def adjacent(self, d):
         return [(d[0], d[1]+1), (d[0], d[1]-1), (d[0]+1, d[1]), (d[0]-1, d[1])]
 
+    def random_free_field(self):
+        while True:
+            x, y = np.random.randint(0, BOARD_SIZE), np.random.randint(0, BOARD_SIZE)
+            if self.owner[x][y] == NO_OWNER:
+                return x, y
+
+    def populate(self, users):
+        for user in users:
+            start = self.random_free_field()
+            self.values[start] = 1
+            self.owner[start] = user.userid
+        for food in range(np.random.poisson(int(FOOD_ABUNDANCE * BOARD_SIZE**2))):
+            field = self.random_free_field()
+            self.values[field] = 1
+            self.owner[field] = FOOD_OWNER
+
     def connected(self, pos):
         owner = self.owner[pos]
         component = np.zeros_like(self.owner, dtype=np.bool)
@@ -341,26 +364,26 @@ class Board:
         return np.where(self.owner != NO_OWNER)
 
 if __name__ == '__main__':
-    b = Board(40)
-    l = Lobby()
-    u1 = User(1001, None, l)
-    u2 = User(1002, None, l)
-    m = Match([u1, u2], b)
-    b.values[20:30,20:30] = 10
-    b.owner[20:30,20:30] = u1.userid
-    b.owner[28:35,30:35] = u2.userid
-    b.values[28:35,30:35] = 1
-
-    t = Turn((20,20), (19,22), u1)
-    m.checkedTurn(t)
-    t = Turn((20,21), (28,30), u1)
-    m.checkedTurn(t)
-    plt.imshow(b.values.astype(np.float64), clim=(0, 10), interpolation="nearest", cmap="hot")
-    plt.show()
-
+    #b = Board(40)
     #l = Lobby()
-    #endpoints.serverFromString(reactor, "tcp:1234").listen(l)
-    #reactor.run()
+    #u1 = User(1001, None, l)
+    #u2 = User(1002, None, l)
+    #m = Match([u1, u2], b)
+    #b.values[20:30,20:30] = 10
+    #b.owner[20:30,20:30] = u1.userid
+    #b.owner[28:35,30:35] = u2.userid
+    #b.values[28:35,30:35] = 1
+
+    #t = Turn((20,20), (19,22), u1)
+    #m.checkedTurn(t)
+    #t = Turn((20,21), (28,30), u1)
+    #m.checkedTurn(t)
+    #plt.imshow(b.values.astype(np.float64), clim=(0, 10), interpolation="nearest", cmap="hot")
+    #plt.show()
+
+    l = Lobby()
+    endpoints.serverFromString(reactor, "tcp:1234").listen(l)
+    reactor.run()
 
 
 
