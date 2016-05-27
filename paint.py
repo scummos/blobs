@@ -16,7 +16,7 @@ import blobs
 colors = [(0, 0, 0), (255, 0, 0), (100, 255, 100), (100, 100, 255), (255, 0, 177)]
 
 class GameField:
-    def __init__(self, size, owners, values, scene: QGraphicsScene):
+    def __init__(self, size, scene: QGraphicsScene):
         self.rectItems = []
         self.pixmap = QPixmap(QSize(820,820))
         self.painter = QPainter(self.pixmap)
@@ -26,24 +26,35 @@ class GameField:
         for index in range(size**2):
             item = QGraphicsRectItem()
             item.setRect(int(index/size), int(index%size), 0.9, 0.9)
-            k = colors[own.index(owner)]
-            color = QtGui.QColor(k[0], k[1], k[2], 255./np.amax(values.flat)*value if owner >= 1000 else 255)
-            brush = QBrush(color)
-            item.setBrush(brush)
             item.setPen(pen)
             scene.addItem(item)
             self.rectItems.append(item)
-            
+
+    @pyqtSlot(int, np.ndarray, np.ndarray)
+    def update(self, size, owners, values):
+        print("update called")
+        own = list(np.unique(owners))[1:]
+        print(owners, own)
+        for index, owner, value in zip(range(size**2), owners.flat, values.flat):
+            if owner == 0:
+                continue
+            k = colors[own.index(owner)]
+            color = QtGui.QColor(k[0], k[1], k[2], int(255./np.max(values)*value) if owner >= 1000 else 255)
+            brush = QBrush(color)
+            item = self.rectItems[index]
+            item.setBrush(brush)
+        self.scene.update(self.scene.sceneRect())
+
     def outputPng(self):
         view = scene.views()[0]
         self.pixmap.fill(Qt.white)
         self.painter.setBackground(Qt.white)
         self.painter.setRenderHints(QtGui.QPainter.HighQualityAntialiasing)
         scene.render(self.painter, QRectF(10,10,800,800), QRectF(0,0,size,size))
-        self.pixmap.save("/var/www/html/state.png")
-        
+        self.pixmap.save("out/state.png")
+
     def outputScorePage(self, owners, values, names, ids):
-        with open('/var/www/html/index.html', 'w') as f:
+        with open('out/index.html', 'w') as f:
             f.write("""<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n
                 <html>\n
                 \t<head>\n
@@ -89,38 +100,29 @@ class GameField:
             f.close()
 
 
-    def update(self, owners, values):
-        own = list(np.unique(owners))
-        for index, (owner, value) in enumerate(zip(owners.flat, values.flat)):
-            color = QtGui.QColor(*colors[own.index(owner)], value*8 if owner >= 1000 else 255)
-            brush = QBrush(color)
-            item.setBrush(brush)
-
 class NetworkInterface(QtCore.QObject):
-    dataReceived = pyqtSignal(np.ndarray, np.ndarray)
+    dataReceived = pyqtSignal(int, np.ndarray, np.ndarray)
 
     def __init__(self):
+        QtCore.QObject.__init__(self)
         HOST = 'localhost'
         PORT = 9001
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.connect((HOST, PORT))
-        self.sock.send('{"type": "stream_game"}')
+        self.sock.send(b'{"type": "stream_game"}')
 
+    @pyqtSlot()
     def run(self):
-        while True:
-            self.loop()
+        for l in self.sock.makefile("rb"):
+            print(l)
+            self.loop(l)
 
-    def loop(self):
-        buf = b""
-        while len(buf) == 0 or buf[-1] != ord('}'):
-            data = self.sock.recv(1024)
-            if len(data) == 0:
-                print("Connection closed")
-                exit(1)
-            buf += data
+    def loop(self, data):
         data = json.loads(data.decode("utf8"))
-        values, owner = blobs.MatchHistory.decodeState(data["board_size"], data["turn"])
-        self.dataReceived.emit(values, owner)
+        if data["type"] == "stream_turn":
+            values, owners = blobs.MatchHistory.decodeState(data["board_size"], data["turn"])
+            print("Got data packet, emitting signal")
+            self.dataReceived.emit(data["board_size"], owners, values)
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
@@ -128,28 +130,24 @@ if __name__ == '__main__':
     v = QGraphicsView()
 
     iface = NetworkInterface()
+    t = QtCore.QThread()
+    iface.moveToThread(t)
+    t.start()
+    QtCore.QMetaObject.invokeMethod(iface, "run", Qt.QueuedConnection)
 
     scene = QGraphicsScene(v)
     v.setRenderHints(QtGui.QPainter.HighQualityAntialiasing)
     v.setScene(scene)
 
-    size = 100
+    size = blobs.BOARD_SIZE
     v.fitInView(0, 0, size, size)
-    owners = np.random.randint(999, 1003, (size, size))
-    values = np.random.poisson(3, (size, size))
-    names = ["1000","1001","1002","1003"]
-    ids = [1000, 1001, 1002, 1003]
-    field = GameField(size,
-                      owners,
-                      values,
-                      scene)
-    field.outputPng()
-    field.outputScorePage(owners,values, names, ids)
-    iface.dataReceived.connect(field.update)
+    field = GameField(size, scene)
+    iface.dataReceived.connect(field.update, Qt.QueuedConnection)
 
     w.setLayout(QtWidgets.QHBoxLayout())
     w.resize(800, 600)
     w.layout().addWidget(v)
+    w.setWindowFlags(Qt.Dialog)
     w.show()
     
     app.exec_()
