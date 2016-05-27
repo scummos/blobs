@@ -47,6 +47,9 @@ class User(protocol.Protocol):
         self.currentMatch = None
         self.username = None
 
+    def __str__(self):
+        return "User(id={}, name={})".format(self.userid, self.username)
+
     def connectionLost(self, reason):
         self.lobby.notifyUserDisconnected(self)
         if self.currentMatch:
@@ -123,7 +126,6 @@ class User(protocol.Protocol):
             done, winner = self.currentMatch.checkMatchFinished()
             if done:
                 self.lobby.finalizeMatch(self.currentMatch)
-                print("Player won:", winner)
             else:
                 next = self.currentMatch.nextUser()
                 next.askTurn()
@@ -176,9 +178,21 @@ class Lobby(protocol.Factory):
         specs = match.spectators[:]
         for spec in match.spectators:
             spec.streamFinished()
-        match.status = "finished"
-        #match.winner
-        # TODO fill in winner
+        done, winner = match.checkMatchFinished()
+        match.history["status"] = "finished"
+        if winner:
+            match.history["winner"] = winner.username
+        else:
+            winner = match.getLargestPlayer()
+            if winner:
+                match.history["winner"] = winner.username
+            match.history["score"] = dict((user.username, score) for user, score in match.getPlayerSizes().items())
+        if match.history["winner"]:
+            self.user_db[match.history["winner"]]["score"] += 1
+            self.writeUserDb()
+        match.addStateToHistory()
+        for spectator in match.spectators:
+            spectator.sendActiveMatch(self)
         self.history.addMatch(match.history)
         self.activeMatches.remove(match)
         for spec in specs:
@@ -264,6 +278,12 @@ class Match:
         }
         self.spectators = []
         self.addStateToHistory()
+
+    def getUserById(self, uid):
+        for user in self.users:
+            if user.userid == uid:
+                return user
+        return None
 
     def nextUser(self) -> User:
         i = (self.users.index(self.currentUser) + 1) % len(self.users)
@@ -371,7 +391,22 @@ class Match:
             return True, None
         owned_by_player = self.board.owner >= MIN_PID
         interesting = self.board.owner[owned_by_player]
-        return not interesting.any() or (interesting[0] == interesting).all(), interesting[0]
+        return not interesting.any() or (interesting[0] == interesting).all(), self.getUserById(interesting[0])
+
+    def getLargestPlayer(self):
+        sizes = self.getPlayerSizes()
+        user, max_score = max(sizes.items(), key=lambda x: x[1])
+        if list(sizes.values()).count(max_score) > 1:
+            return None
+        else:
+            return user
+
+    def getPlayerSizes(self):
+        sizes = {}
+        for user in self.users:
+            size = int(np.sum(self.board.values[self.board.owner == user.userid]))
+            sizes[user] = size
+        return sizes
 
     def addStateToHistory(self):
         self.history["turns"].append(MatchHistory.encodeState(self.board.values, self.board.owner))
