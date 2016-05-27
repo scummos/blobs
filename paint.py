@@ -14,6 +14,8 @@ colors = [(0, 0, 0), (255, 0, 0), (100, 255, 100), (100, 100, 255), (255, 0, 177
 class GameField:
     def __init__(self, size, owners, values, scene: QGraphicsScene):
         self.rectItems = []
+        self.pixmap = QPixmap(QSize(820,820))
+        self.painter = QPainter(self.pixmap)
         pen = QPen()
         pen.setStyle(Qt.NoPen)
         own = list(np.unique(owners))
@@ -21,7 +23,7 @@ class GameField:
             item = QGraphicsRectItem()
             item.setRect(int(index/size), int(index%size), 0.9, 0.9)
             k = colors[own.index(owner)]
-            color = QtGui.QColor(k[0], k[1], k[2], value*20 if owner >= 1000 else 255)
+            color = QtGui.QColor(k[0], k[1], k[2], 255./np.amax(values.flat)*value if owner >= 1000 else 255)
             brush = QBrush(color)
             item.setBrush(brush)
             item.setPen(pen)
@@ -30,16 +32,57 @@ class GameField:
             
     def outputPng(self):
         view = scene.views()[0]
-        pixmap = QPixmap(QSize(820,820))
-        pixmap.fill(Qt.white)
-        painter = QPainter(pixmap)
-        painter.setBackground(Qt.white)
-        painter.setRenderHints(QtGui.QPainter.HighQualityAntialiasing)
-        scene.render(painter, QRectF(10,10,800,800), QRectF(0,0,size,size))
-        pixmap.save("/var/www/html/state.png")
+        self.pixmap.fill(Qt.white)
+        self.painter.setBackground(Qt.white)
+        self.painter.setRenderHints(QtGui.QPainter.HighQualityAntialiasing)
+        scene.render(self.painter, QRectF(10,10,800,800), QRectF(0,0,size,size))
+        self.pixmap.save("/var/www/html/state.png")
         
-    #def outputScorePage(self):
-        
+    def outputScorePage(self, owners, values, names, ids):
+        with open('/var/www/html/index.html', 'w') as f:
+            f.write("""<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">\n
+                <html>\n
+                \t<head>\n
+                \t\t<title>GPN16: Blobs</title>\n
+                \t\t<style>\n
+                \t\t\ttable\n
+                \t\t\t{\n
+                \t\t\t\tborder-collapse:collapse;\n
+                \t\t\t\twidth:100%;\n
+                \t\t\t}\n
+                \t\t\tth,td\n
+                \t\t\t{\n
+                \t\t\t\ttext-align:left;\n
+                \t\t\t\tpadding:8px;\n
+                \t\t\t}\n
+                \t\t\ttr:nth-child(even)\n
+                \t\t\t{\n
+                \t\t\t\tbackground-color:#f2f2f2;\n
+                \t\t\t}\n
+                \t\t\tth\n
+                \t\t\t{\n
+                \t\t\t\tbackground-color:#600000;\n
+                \t\t\t\tcolor:white\n
+                \t\t\t}\n
+                \t\t</style>\n
+                \t</head>\n
+                \t<body>\n
+                \t\t<h2><a href=\"http://www.gulas.ch\">GPN16</a>: <a href=\"http://www.github.com/scummos/blobs\">Blobs</a>$ Lobby</h2>\n
+                \t\t<center>\n
+                \t\t\t<img src=logo.svg /><br />\n
+                \t\t\t<img src=state.png /><br />\n
+                \t\t</center>\n
+                \t\t<table>\n
+                \t\t\t<tr>\n
+                \t\t\t\t<th>Rank</th>\n
+                \t\t\t\t<th>Bot name</th>\n
+                \t\t\t\t<th>Score</th>\n
+                \t\t\t</tr>\n""");
+            #TODO: output ramsh here
+            f.write("""\t\t</table>\n
+                \t</body>\n
+                </html>\n""")
+            f.close()
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
@@ -52,11 +95,16 @@ if __name__ == '__main__':
 
     size = 100
     v.fitInView(0, 0, size, size)
+    owners = np.random.randint(999, 1003, (size, size))
+    values = np.random.poisson(3, (size, size))
+    names = ["1000","1001","1002","1003"]
+    ids = [1000, 1001, 1002, 1003]
     field = GameField(size,
-                      np.random.randint(999, 1003, (size, size)),
-                      np.random.poisson(3, (size, size)),
+                      owners,
+                      values,
                       scene)
     field.outputPng()
+    field.outputScorePage(owners,values, names, ids)
 
     w.setLayout(QtWidgets.QHBoxLayout())
     w.resize(800, 600)
