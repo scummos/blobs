@@ -431,7 +431,7 @@ class MatchHistory:
 
     @staticmethod
     def encodeState(values, owner):
-        data = self.board.values.tostring() + self.board.owner.tostring()
+        data = values.tostring() + owner.tostring()
         compressed = binascii.b2a_base64(zlib.compress(data)).decode("utf8")
         return compressed
 
