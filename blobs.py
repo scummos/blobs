@@ -5,6 +5,8 @@ import sys
 import matplotlib.pyplot as plt
 import numpy as np
 import json
+import zlib
+import binascii
 from twisted.internet import protocol, reactor, endpoints
 
 NO_OWNER = 0
@@ -13,6 +15,7 @@ MIN_PID = 1000
 PLAYERS_IN_MATCH = 2
 BOARD_SIZE = 64
 FOOD_ABUNDANCE = 0.01
+MAX_ROUNDS = 1000
 
 class User(protocol.Protocol):
     """
@@ -46,6 +49,8 @@ class User(protocol.Protocol):
 
     def connectionLost(self, reason):
         self.lobby.notifyUserDisconnected(self)
+        if self.currentMatch:
+            self.currentMatch.removeUser(self)
 
     def matchStarted(self, match):
         assert isinstance(match, Match)
@@ -98,7 +103,6 @@ class User(protocol.Protocol):
         if data["type"] == "register":
             if self.lobby.registerUser(data["user"], data["password"]):
                 self._sendSuccessResponse()
-                self.network_state = "lobby"
             else:
                 self._sendErrorResponse("Username already taken.")
         elif data["type"] == "login":
@@ -147,10 +151,17 @@ class Lobby(protocol.Factory):
         self.loadUserDb()
         self.activeUsers = []
         self.activeMatches = []
+        self.history = MatchHistory()
 
     def finalizeMatch(self, match):
         for user in match.users:
-            user.transport.close()
+            user.transport.loseConnection()
+        for spec in match.spectators:
+            spec.stopSpectating()
+        match.status = "finished"
+        #match.winner
+        # TODO fill in winner
+        self.history.addMatch(match.history)
         self.activeMatches.remove(match)
 
     def notifyUserConnected(self, user):
@@ -221,6 +232,16 @@ class Match:
         self.board = board
         self.users = users
         self.currentUser = self.users[0]
+        self.current_round = 0
+        self.history = {
+            "users": [u.username for u in self.users],
+            "board_size": self.board.size,
+            "turns": [],
+            "status": "playing",
+            "winner": None
+        }
+        self.spectators = []
+        self.addStateToHistory()
 
     def nextUser(self) -> User:
         i = (self.users.index(self.currentUser) + 1) % len(self.users)
@@ -275,7 +296,6 @@ class Match:
         else:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
-
         assert self.board.playerContiguous(turn.player.userid)
 
     def checkTurn(self, turn: Turn):
@@ -311,14 +331,33 @@ class Match:
 
     def checkedTurn(self, turn):
         ok, message = self.checkTurn(turn)
+        self.current_round += 1
         if ok:
             self.execTurn(turn)
+            self.addStateToHistory()
+            for spectator in self.spectators:
+                spectator.sendActiveMatch(self)
         return ok, message
 
     def checkMatchFinished(self):
+        if self.current_round >= MAX_ROUNDS:
+            return True
         owned_by_player = self.board.owner >= MIN_PID
         interesting = self.board.owner[owned_by_player]
         return not interesting.any() or (interesting[0] == interesting).all()
+
+    def addStateToHistory(self):
+        self.history["turns"].append(MatchHistory.encodeState(self.board.values, self.board.owner))
+
+    def removeUser(self, user):
+        if self.currentUser == user:
+            next = self.nextUser()
+            next.askTurn()
+        self.users.remove(user)
+        mask = self.board.owner == user.userid
+        self.board.values[mask] = 0
+        self.board.owner[mask] = NO_OWNER
+
 
 class Board:
     def __init__(self, size):
@@ -374,6 +413,59 @@ class Board:
 
     def populated(self):
         return np.where(self.owner != NO_OWNER)
+
+
+class MatchHistory:
+    def __init__(self):
+        self.filename = "match.db"
+        self.matches = []
+        self.player_matches = {}
+        self.current_match_id = 0
+        self.loadMatchData()
+
+    @staticmethod
+    def encodeState(values, owner):
+        data = self.board.values.tostring() + self.board.owner.tostring()
+        compressed = binascii.b2a_base64(zlib.compress(data)).decode("utf8")
+        return compressed
+
+    @staticmethod
+    def decodeState(board_size, compressed):
+        binary = zlib.decompress(binascii.a2b_base64(compressed))
+        values_raw = binary[:len(binary)//2]
+        owner_raw = binary[len(binary)//2:]
+        values = np.fromstring(values_raw, "uint16", board_size*board_size)
+        owner = np.fromstring(owner_raw, "uint16", board_size*board_size)
+        values.reshape((board_size, board_size))
+        owner.reshape((board_size, board_size))
+        return values, owner
+
+    def loadMatchData(self):
+        self.matches = []
+        self.player_matches = {}
+        self.current_match_id = 0
+        print("Loading matches…", end="")
+        try:
+            with open(self.filename) as f:
+                for line in f:
+                    match = json.loads(line)
+                    self.addMatch(match, False)
+            print(" done! {} matches loaded".format(self.current_match_id))
+        except IOError as e:
+            print(" cannot open database. {}".format(str(e)))
+
+    def addMatch(self, match_history, save_to_file=True):
+        self.matches.append(match_history)
+        for p in match_history["users"]:
+            if p in self.player_matches:
+                self.player_matches[p].append(self.current_match_id)
+            else:
+                self.player_matches[p] = [self.current_match_id]
+        if save_to_file:
+            with open(self.filename, "a") as f:
+                f.write(json.dumps(match_history)+"\n")
+        self.current_match_id += 1
+
 
 if __name__ == '__main__':
     #b = Board(40)
