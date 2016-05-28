@@ -55,12 +55,13 @@ for line in s.makefile("rb"):
     print("Num neighbors, best:", neigh, best)
     print(me, my_pid)
 
+    source = tuple(random.choice(me))
+    dist_to_food = [(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food]
+    best_food = food[dist_to_food.index(min(dist_to_food))]
+    dist_to_best = [(abs(best_food[0] - f[0]) + abs(best_food[1] - f[1])) for f in me]
+    move_to = me[dist_to_best.index(min(dist_to_best))]
     for item in me:
         source = tuple(item)
-        dist_to_food = [(abs(source[0] - f[0]) + abs(source[1] - f[1])) for f in food]
-        best_food = food[dist_to_food.index(min(dist_to_food))]
-        dist_to_best = [(abs(best_food[0] - f[0]) + abs(best_food[1] - f[1])) for f in me]
-        move_to = me[dist_to_best.index(min(dist_to_best))]
         if move_to[0] > best_food[0]:
             dest = (move_to[0]-1, move_to[1])
         elif move_to[0] < best_food[0]:
@@ -73,7 +74,7 @@ for line in s.makefile("rb"):
         t = Turn(source, dest, User(my_pid))
         m = Match([User(my_pid)], current_board, None)
         ok, message = m.checkTurn(t)
-
+        print(ok, message)
         if ok:
             break
 
