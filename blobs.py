@@ -361,7 +361,8 @@ class Match:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
         assert self.board.playerContiguous(srcOwner)
-        assert self.board.playerContiguous(destOwner)
+        if destOwner >= MIN_PID:
+            assert self.board.playerContiguous(destOwner)
 
     def paintTurn(self, out):
         plt.imshow(self.board.owner.astype(np.float64), clim=(1000, 1005), interpolation="nearest", cmap="hot")
