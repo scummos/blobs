@@ -27,15 +27,8 @@ def num_own_neighbors(d, fields, my_pid, ignore=[]):
     adjacent = [[d[0], d[1]+1], [d[0], d[1]-1], [d[0]+1, d[1]], [d[0]-1, d[1]]]
     return len([f for f in fields if f[0] in adjacent and f[1] == my_pid and f[0] not in ignore])
 
-while True:
-    buf = bytes()
-    while len(buf) == 0 or buf[-1] != ord('}'):
-        data = s.recv(1024)
-        if len(data) == 0:
-            print("Connection closed")
-            exit(1)
-        buf += data
-    state = json.loads(buf.decode("utf8"))
+for line in s.makefile("rb"):
+    state = json.loads(line.decode("utf8"))
     #print(state)
     my_pid = [p[1] for p in state["player_names"] if p[0] == PLAYER_NAME][0]
     fields = list(zip(state["fields_used"], state["fields_owned_by"], state["fields_values"]))
