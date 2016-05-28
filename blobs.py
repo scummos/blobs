@@ -17,6 +17,7 @@ PLAYERS_IN_MATCH = 2
 BOARD_SIZE = 64
 FOOD_ABUNDANCE = 0.01
 MAX_ROUNDS = 5000
+MAX_CONSECUTIVE_FAILS = 100
 
 class User(protocol.Protocol):
     """
@@ -48,6 +49,7 @@ class User(protocol.Protocol):
         self.network_state = "unauthorized"
         self.currentMatch = None
         self.username = None
+        self.consecutive_failed_turns = 0
 
     def __str__(self):
         return "User(id={}, name={})".format(self.connection_id, self.username)
@@ -123,8 +125,10 @@ class User(protocol.Protocol):
             ok, message = self.currentMatch.checkedTurn(Turn(data["from"], data["to"], self))
             if ok:
                 self._sendSuccessResponse(message)
+                self.consecutive_failed_turns = 0
             else:
                 self._sendErrorResponse(message)
+                self.consecutive_failed_turns += 1
             self.network_state = "game_waiting"
             done, winner = self.currentMatch.checkMatchFinished()
             if done:
@@ -269,12 +273,15 @@ class Match:
         try:
             done, winner = self.checkMatchFinished()
             self.history["status"] = "finished"
+            if not winner:
+                sizes = self.getPlayerSizes()
+                winner, max_score = max(sizes.items(),
+                    key=lambda x: x[1] if x[0].consecutive_failed_turns < MAX_CONSECUTIVE_FAILS else -1)
+                if list(sizes.values()).count(max_score) > 1:
+                    winner = None
             if winner:
                 self.history["winner"] = winner.username
-            else:
-                winner = self.getLargestPlayer()
-                if winner:
-                    self.history["winner"] = winner.username
+            self.logger.info("Match won by: {}".format(winner))
             if self.history["winner"]:
                 self.lobby.user_db[self.history["winner"]]["score"] += 1
                 self.lobby.writeUserDb()
@@ -404,6 +411,9 @@ class Match:
     def checkMatchFinished(self):
         if self.current_round >= MAX_ROUNDS:
             return True, None
+        for u in self.users:
+            if u.consecutive_failed_turns >= MAX_CONSECUTIVE_FAILS:
+                return True, None
         owned_by_player = self.board.owner >= MIN_PID
         interesting = self.board.owner[owned_by_player]
         return not interesting.any() or (interesting[0] == interesting).all(), self.getUserById(interesting[0])
