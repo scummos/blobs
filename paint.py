@@ -34,7 +34,6 @@ class GameField:
 
     @pyqtSlot(int, np.ndarray, np.ndarray)
     def update(self, size, owners, values):
-        print("update called")
         own = list(np.unique(owners))[1:]
         noBrush = QBrush(Qt.NoBrush)
         first = False
@@ -126,7 +125,6 @@ class NetworkInterface(QtCore.QObject):
     @pyqtSlot()
     def run(self):
         for l in self.sock.makefile("rb"):
-            print(l)
             self.loop(l)
         self.connectionClosed.emit()
 
@@ -134,7 +132,6 @@ class NetworkInterface(QtCore.QObject):
         data = json.loads(data.decode("utf8"))
         if data["type"] == "stream_turn":
             values, owners = blobs.MatchHistory.decodeState(data["board_size"], data["turn"])
-            print("Got data packet, emitting signal")
             self.dataReceived.emit(data["board_size"], owners, values)
 
 if __name__ == '__main__':
