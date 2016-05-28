@@ -113,6 +113,7 @@ class GameField:
 
 class NetworkInterface(QtCore.QObject):
     dataReceived = pyqtSignal(int, np.ndarray, np.ndarray)
+    connectionClosed = pyqtSignal()
 
     def __init__(self):
         QtCore.QObject.__init__(self)
@@ -127,6 +128,7 @@ class NetworkInterface(QtCore.QObject):
         for l in self.sock.makefile("rb"):
             print(l)
             self.loop(l)
+        self.connectionClosed.emit()
 
     def loop(self, data):
         data = json.loads(data.decode("utf8"))
@@ -139,6 +141,10 @@ if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     w = QtWidgets.QWidget()
     v = QGraphicsView()
+
+    def quit():
+        print("Connection closed by server")
+        app.quit()
 
     iface = NetworkInterface()
     t = QtCore.QThread()
@@ -154,6 +160,7 @@ if __name__ == '__main__':
     v.fitInView(0, 0, size, size)
     field = GameField(size, scene)
     iface.dataReceived.connect(field.update, Qt.QueuedConnection)
+    iface.connectionClosed.connect(quit)
 
     w.setLayout(QtWidgets.QHBoxLayout())
     w.resize(800, 600)
