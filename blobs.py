@@ -332,6 +332,7 @@ class Match:
         self.board.owner[turn.dest] = srcOwner
         destValue = self.board.values[turn.dest]
         srcValue = self.board.values[turn.source]
+        assert srcValue > destValue, "Invalid game move!! Attack with weak field."
         self.board.values[turn.dest] = srcValue - destValue - 1
 
         components = self.splitCreatedByTurn(turn.dest, destOwner)
@@ -388,7 +389,7 @@ class Match:
 
         destOwner = self.board.owner[turn.dest]
         isEnemy = destOwner > MIN_PID and destOwner != turn.player.connection_id
-        if isEnemy and self.board.values[turn.dest] > self.board.values[turn.source] + 1:
+        if isEnemy and self.board.values[turn.dest] + 1 > self.board.values[turn.source]:
             return False, "you cannot attack fields stronger than you"
 
         if self.board.values[turn.source] == 1:
