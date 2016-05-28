@@ -162,6 +162,7 @@ class Lobby(protocol.Factory):
         self.waiting_spectators = []
 
     def addSpectator(self, spectator):
+        self.logger.debug("addSpectator, active matches: {}".format(repr(self.activeMatches)))
         if self.activeMatches:
             self.activeMatches[0].spectators.append(spectator)
             spectator.startSpectating(self.activeMatches[0])
@@ -193,7 +194,7 @@ class Lobby(protocol.Factory):
         self.logger.info("Starting new match.")
         board = Board(BOARD_SIZE)
         board.populate(users)
-        match = Match(users, board)
+        match = Match(self, users, board)
         self.activeMatches.append(match)
         for user in users:
             user.matchStarted(match)
@@ -240,10 +241,11 @@ class Turn:
 
 
 class Match:
-    def __init__(self, users, board):
+    def __init__(self, lobby, users, board):
         self.logger = logging.getLogger("Match({})".format(
             ", ".join("{}({})".format(u.username, u.connection_id) for u in users)))
         assert isinstance(board, Board)
+        self.lobby = lobby
         self.board = board
         self.users = users
         self.currentUser = self.users[0]
@@ -264,27 +266,33 @@ class Match:
         for user in self.users:
             user.transport.loseConnection()
         specs = self.spectators[:]
-        for spec in self.spectators:
-            spec.streamFinished()
-        done, winner = self.checkMatchFinished()
-        self.history["status"] = "finished"
-        if winner:
-            self.history["winner"] = winner.username
-        else:
-            winner = self.getLargestPlayer()
+        try:
+            done, winner = self.checkMatchFinished()
+            self.history["status"] = "finished"
             if winner:
                 self.history["winner"] = winner.username
-            self.history["score"] = dict((user.username, score) for user, score in self.getPlayerSizes().items())
-        if self.history["winner"]:
-            self.user_db[self.history["winner"]]["score"] += 1
-            self.writeUserDb()
-        self.addStateToHistory()
-        for spectator in self.spectators:
-            spectator.sendActiveMatch(self)
-        self.lobby.history.addMatch(self.history)
-        self.lobby.activeMatches.remove(self)
-        for spec in specs:
-            self.lobby.addSpectator(spec)
+            else:
+                winner = self.getLargestPlayer()
+                if winner:
+                    self.history["winner"] = winner.username
+            if self.history["winner"]:
+                self.lobby.user_db[self.history["winner"]]["score"] += 1
+                self.lobby.writeUserDb()
+            self.addStateToHistory()
+            for spectator in self.spectators:
+                spectator.sendActiveMatch(self)
+        except Exception as e:
+            self.logger.exception("Error while detecting game winner…")
+        finally:
+            for spec in self.spectators:
+                spec.streamFinished()
+            self.lobby.history.addMatch(self.history)
+            self.lobby.activeMatches.remove(self)
+            for spec in specs:
+                self.lobby.addSpectator(spec)
+
+    def getCurrentScore(self):
+        return dict((user.username, score) for user, score in self.getPlayerSizes().items())
 
     def getUserById(self, uid):
         for user in self.users:
@@ -572,7 +580,7 @@ class Spectator(protocol.Protocol):
             pass
 
     def connectionLost(self, reason):
-        self.logger.info("Spectator disconnected: "+str(reason))
+        self.logger.info("Spectator disconnected")
         self.stopSpectating()
 
     def dataReceived(self, rawdata):
@@ -618,6 +626,7 @@ class Spectator(protocol.Protocol):
                     )
                 self._sendSuccessResponse(message="Yessir.", users=users)
             elif data["type"] == "stream_game":
+                self.logger.info("Start game streaming")
                 self.lobby.addSpectator(self)
             else:
                 self._sendErrorResponse("Unknown request.")
@@ -628,6 +637,7 @@ class Spectator(protocol.Protocol):
     def sendActiveMatch(self, match):
         pkg = { "type": "stream_turn" }
         pkg.update(match.history)
+        pkg["score"] = match.getCurrentScore()
         pkg["turn"] = pkg["turns"][-1]
         del pkg["turns"]
         self._sendMessage(pkg)
