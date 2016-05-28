@@ -76,7 +76,7 @@ class User(protocol.Protocol):
             "fields_owned_by": [int(x) for x in owners],
             "fields_values": [int(x) for x in values]
         }
-        self.transport.write(json.dumps(pkg).encode("utf8"))
+        self.transport.write(json.dumps(pkg).encode("utf8")+b"\n")
 
     def dataReceived(self, rawdata):
         # internal check. Have we set the network state to a valid value?
@@ -139,7 +139,7 @@ class User(protocol.Protocol):
             "status": "failure",
             "message": message
         }
-        self.transport.write(json.dumps(pkg).encode("utf8"))
+        self.transport.write(json.dumps(pkg).encode("utf8")+b"\n")
 
     def _sendSuccessResponse(self, message="Ok."):
         pkg = {
@@ -147,7 +147,7 @@ class User(protocol.Protocol):
             "status": "success",
             "message": message
         }
-        self.transport.write(json.dumps(pkg).encode("utf8"))
+        self.transport.write(json.dumps(pkg).encode("utf8")+b"\n")
 
 
 class Lobby(protocol.Factory):
