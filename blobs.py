@@ -74,6 +74,7 @@ class User(protocol.Protocol):
         pkg = {
             "type": "your_turn",
             "player_names": names,
+            "board_size": self.currentMatch.board.size,
             "fields_used": used,
             "fields_owned_by": [int(x) for x in owners],
             "fields_values": [int(x) for x in values]
@@ -198,7 +199,7 @@ class Lobby(protocol.Factory):
         self.logger.info("Starting new match.")
         board = Board(BOARD_SIZE)
         board.populate(users)
-        match = Match(self, users, board)
+        match = Match(users, board, self)
         self.activeMatches.append(match)
         for user in users:
             user.matchStarted(match)
@@ -245,7 +246,7 @@ class Turn:
 
 
 class Match:
-    def __init__(self, lobby, users, board):
+    def __init__(self, users, board, lobby=None):
         self.logger = logging.getLogger("Match({})".format(
             ", ".join("{}({})".format(u.username, u.connection_id) for u in users)))
         assert isinstance(board, Board)
@@ -263,7 +264,6 @@ class Match:
         }
         self.spectators = []
         self.addStateToHistory()
-
 
     def finalize(self):
         self.logger.info("Finalize")
@@ -360,7 +360,8 @@ class Match:
         else:
             # field owned by enemy
             self.execFight(turn, srcOwner, destOwner)
-        assert self.board.playerContiguous(turn.player.connection_id)
+        assert self.board.playerContiguous(srcOwner)
+        assert self.board.playerContiguous(destOwner)
 
     def paintTurn(self, out):
         plt.imshow(self.board.owner.astype(np.float64), clim=(1000, 1005), interpolation="nearest", cmap="hot")
